@@ -255,10 +255,11 @@ class MagicMouseScrollService:
     """Bounded/reconnecting HID reader. It performs input reads only."""
 
     def __init__(self, enabled, natural, speed, log, status_changed=None,
-                 hid_module=None, injector=None):
+                 hid_module=None, injector=None, smooth=None):
         self._enabled = enabled
         self._natural = natural
         self._speed = speed
+        self._smooth = smooth or (lambda: True)
         self._log = log
         self._status_changed = status_changed or (lambda _status: None)
         self._hid_module = hid_module
@@ -326,6 +327,7 @@ class MagicMouseScrollService:
             lambda: {
                 "enabled": bool(self._enabled()),
                 "natural": bool(self._natural()),
+                "smooth": bool(self._smooth()),
                 "speed": self._speed(),
             },
         )
