@@ -1,5 +1,7 @@
 """Pure, testable core helpers for Pearipherals."""
 
+import ctypes
+import ctypes.wintypes as wintypes
 import json
 import os
 import tempfile
@@ -249,6 +251,152 @@ class BatteryAlertPolicy:
         self._pending = {}
 
 
+class _HIDP_CAPS(ctypes.Structure):
+    _fields_ = [
+        ("Usage", ctypes.c_ushort),
+        ("UsagePage", ctypes.c_ushort),
+        ("InputReportByteLength", ctypes.c_ushort),
+        ("OutputReportByteLength", ctypes.c_ushort),
+        ("FeatureReportByteLength", ctypes.c_ushort),
+        ("Reserved", ctypes.c_ushort * 17),
+        ("NumberLinkCollectionNodes", ctypes.c_ushort),
+        ("NumberInputButtonCaps", ctypes.c_ushort),
+        ("NumberInputValueCaps", ctypes.c_ushort),
+        ("NumberInputDataIndices", ctypes.c_ushort),
+        ("NumberOutputButtonCaps", ctypes.c_ushort),
+        ("NumberOutputValueCaps", ctypes.c_ushort),
+        ("NumberOutputDataIndices", ctypes.c_ushort),
+        ("NumberFeatureButtonCaps", ctypes.c_ushort),
+        ("NumberFeatureValueCaps", ctypes.c_ushort),
+        ("NumberFeatureDataIndices", ctypes.c_ushort),
+    ]
+
+
+class _HIDP_VALUE_CAPS(ctypes.Structure):
+    # Mirrors hidpi.h HIDP_VALUE_CAPS with Pack=4. For IsRange=False,
+    # UsageMin occupies the union slot called Usage in the native structure.
+    _pack_ = 4
+    _fields_ = [
+        ("UsagePage", ctypes.c_ushort),
+        ("ReportID", ctypes.c_ubyte),
+        ("IsAlias", ctypes.c_ubyte),
+        ("BitField", ctypes.c_ushort),
+        ("LinkCollection", ctypes.c_ushort),
+        ("LinkUsage", ctypes.c_ushort),
+        ("LinkUsagePage", ctypes.c_ushort),
+        ("IsRange", ctypes.c_ubyte),
+        ("IsStringRange", ctypes.c_ubyte),
+        ("IsDesignatorRange", ctypes.c_ubyte),
+        ("IsAbsolute", ctypes.c_ubyte),
+        ("HasNull", ctypes.c_ubyte),
+        ("Reserved", ctypes.c_ubyte),
+        ("BitSize", ctypes.c_ushort),
+        ("ReportCount", ctypes.c_ushort),
+        ("Reserved1", ctypes.c_ushort),
+        ("Reserved2", ctypes.c_ushort),
+        ("Reserved3", ctypes.c_ushort),
+        ("Reserved4", ctypes.c_ushort),
+        ("Reserved5", ctypes.c_ushort),
+        ("UnitsExp", ctypes.c_uint),
+        ("Units", ctypes.c_uint),
+        ("LogicalMin", wintypes.LONG),
+        ("LogicalMax", wintypes.LONG),
+        ("PhysicalMin", wintypes.LONG),
+        ("PhysicalMax", wintypes.LONG),
+        ("UsageMin", ctypes.c_ushort),
+        ("UsageMax", ctypes.c_ushort),
+        ("StringMin", ctypes.c_ushort),
+        ("StringMax", ctypes.c_ushort),
+        ("DesignatorMin", ctypes.c_ushort),
+        ("DesignatorMax", ctypes.c_ushort),
+        ("DataIndexMin", ctypes.c_ushort),
+        ("DataIndexMax", ctypes.c_ushort),
+    ]
+
+
+def discover_generic_battery_feature(path):
+    """Return (report_id, report_length) only if HID capabilities declare
+    Generic Device / Battery Strength (Usage Page 0x0006, Usage 0x0020)
+    as a FEATURE value capability on this exact HID collection.
+
+    The probe only opens a HID handle for descriptor inspection. It does not
+    write output or feature reports, change drivers, or modify the registry.
+    """
+    if os.name != "nt":
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    hid = ctypes.WinDLL("hid", use_last_error=True)
+
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    get_preparsed = hid.HidD_GetPreparsedData
+    get_preparsed.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+    get_preparsed.restype = wintypes.BOOL
+    free_preparsed = hid.HidD_FreePreparsedData
+    free_preparsed.argtypes = [ctypes.c_void_p]
+    free_preparsed.restype = wintypes.BOOL
+    get_caps = hid.HidP_GetCaps
+    get_caps.argtypes = [ctypes.c_void_p, ctypes.POINTER(_HIDP_CAPS)]
+    get_caps.restype = wintypes.LONG
+    get_value_caps = hid.HidP_GetValueCaps
+    get_value_caps.argtypes = [
+        ctypes.c_int, ctypes.POINTER(_HIDP_VALUE_CAPS),
+        ctypes.POINTER(ctypes.c_ushort), ctypes.c_void_p,
+    ]
+    get_value_caps.restype = wintypes.LONG
+
+    device_path = os.fsdecode(path)
+    handle = create_file(
+        device_path, 0, 0x00000001 | 0x00000002, None, 3, 0, None
+    )
+    handle_value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle_value is None or handle_value == invalid_handle:
+        return None
+
+    preparsed = ctypes.c_void_p()
+    try:
+        if not get_preparsed(handle, ctypes.byref(preparsed)):
+            return None
+
+        caps = _HIDP_CAPS()
+        if get_caps(preparsed, ctypes.byref(caps)) != 0x00110000:
+            return None
+        count_value = int(caps.NumberFeatureValueCaps)
+        feature_length = int(caps.FeatureReportByteLength)
+        if count_value <= 0 or feature_length < 2:
+            return None
+
+        array_type = _HIDP_VALUE_CAPS * count_value
+        value_caps = array_type()
+        count = ctypes.c_ushort(count_value)
+        if get_value_caps(2, value_caps, ctypes.byref(count), preparsed) != 0x00110000:
+            return None
+
+        for cap in value_caps[:count.value]:
+            if (
+                cap.IsRange == 0
+                and cap.UsagePage == 0x0006
+                and cap.UsageMin == 0x0020
+                and cap.ReportID >= 0
+            ):
+                return int(cap.ReportID), feature_length
+        return None
+    finally:
+        if preparsed.value:
+            free_preparsed(preparsed)
+        close_handle(handle)
+
+
 class HidBatteryBackend:
     """Small injected hidapi adapter with one handle lifetime per query."""
 
@@ -266,7 +414,11 @@ class HidBatteryBackend:
         finally:
             handle.close()
 
-    def request_feature_report(self, path, report_id, length=2):
+    def feature_report_info(self, path):
+        """Inspect the collection descriptor; do not guess a feature report ID."""
+        return discover_generic_battery_feature(path)
+
+    def request_feature_report(self, path, report_id, length):
         """Read one descriptor-selected feature report; never sends a report."""
         handle = self._hid.device()
         try:
@@ -339,26 +491,29 @@ def parse_apple_mouse_input_report(report):
     )
 
 
-def parse_apple_mouse_feature_report(report):
-    """Parse Generic Device Battery Strength Feature 0x47 on Magic Mouse v2."""
+def parse_apple_mouse_feature_report(report, expected_report_id):
+    """Parse a descriptor-selected Generic Device Battery Strength Feature."""
     raw = bytes(report)
-    if len(raw) < 2 or raw[0] != 0x47:
-        raise ValueError("unexpected Magic Mouse feature report")
+    if len(raw) < 2 or raw[0] != expected_report_id:
+        raise ValueError("unexpected Magic Mouse feature report ID")
     if not 1 <= raw[1] <= 100:
         raise ValueError("Magic Mouse feature battery percentage is outside 1..100")
-    # Report 0x47 exposes percentage only here; do not infer charge state.
+    # Feature report exposes percentage only; do not infer charge state.
     return BatteryResult("available", percentage=raw[1])
 
 
 def query_apple_mouse_battery(
-    enumerate_devices, request_input_report, request_feature_report=None
+    enumerate_devices,
+    request_input_report,
+    request_feature_report=None,
+    feature_report_info=None,
 ):
     """Read Magic Mouse v2 battery without changing or binding any driver.
 
-    Prefer the known vendor battery collection (Input 0x90). If the active
-    driver instead exposes a Generic Device Battery Strength feature, try
-    Feature 0x47 on the device's own HID collections. This fallback is confined
-    to PID 0x0269 and accepted only when both report ID and percentage validate.
+    Prefer Input 0x90 on its known vendor battery collection. If this is not
+    exposed, read Feature only when the same HID collection's descriptor
+    advertises Generic Device / Battery Strength (0x0006/0x0020). The report ID
+    and length come from the descriptor, never a guessed IOCTL or write.
     """
     targets = [
         device
@@ -392,10 +547,9 @@ def query_apple_mouse_battery(
         except (TypeError, ValueError):
             had_invalid = True
 
-    if request_feature_report is not None:
-        # Prefer the ordinary mouse collection. If its driver exposes the
-        # battery feature on another collection, probing stays limited to this
-        # exact PID and fixed, read-only Feature report ID 0x47.
+    if request_feature_report is not None and feature_report_info is not None:
+        # Inspect the ordinary mouse collection first, then other collections
+        # of this exact PID. Only a descriptor-declared battery FEATURE is read.
         feature_candidates = pointer_collections + [
             d for d in targets if d not in pointer_collections
         ]
@@ -406,12 +560,28 @@ def query_apple_mouse_battery(
                 continue
             seen_paths.add(path)
             try:
-                report = request_feature_report(path, 0x47, 2)
+                info = feature_report_info(path)
+            except Exception:
+                had_failure = True
+                continue
+            if (
+                not isinstance(info, (tuple, list))
+                or len(info) != 2
+                or type(info[0]) is not int
+                or type(info[1]) is not int
+                or info[0] < 0
+                or info[1] < 2
+            ):
+                continue
+
+            report_id, report_length = info
+            try:
+                report = request_feature_report(path, report_id, report_length)
             except Exception:
                 had_failure = True
                 continue
             try:
-                return parse_apple_mouse_feature_report(report)
+                return parse_apple_mouse_feature_report(report, report_id)
             except (TypeError, ValueError):
                 had_invalid = True
 
@@ -503,6 +673,7 @@ class BatteryPoller:
                 enumerate_cycle,
                 self.backend.request_report,
                 getattr(self.backend, "request_feature_report", None),
+                getattr(self.backend, "feature_report_info", None),
             )
         keyboard = self._with_stale_state("keyboard", keyboard, now)
         trackpad = self._with_stale_state("trackpad", trackpad, now)
