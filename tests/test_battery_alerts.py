@@ -84,7 +84,7 @@ def app_harness():
         "make_icon", "suppress_pointer", "three_finger_drag", "start_battery_worker",
         "start_mouse_scroll_service", "stop_mouse_scroll_service",
         "on_toggle", "on_mode_swipes", "on_mode_drag", "on_mode_off", "on_natural_scroll",
-        "on_mouse_scroll_toggle", "on_mouse_natural_scroll_toggle", "set_mouse_scroll_speed",
+        "on_mouse_scroll_toggle", "on_mouse_natural_scroll_toggle", "on_mouse_smooth_scroll_toggle", "set_mouse_scroll_speed",
         "mouse_scroll_status_label", "battery_menu_label", "tp_settings", "on_apply_tp",
         "on_restore_tp", "on_autostart", "on_about", "on_export_diagnostics",
         "on_open_docs", "on_report_problem", "on_prepare_removal", "append_error",
