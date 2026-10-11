@@ -36,4 +36,4 @@ jobs:
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Run byte-compilation gate
-        run: python -m py_compile pearipherals.py pearipherals_core.py pearipherals_snipping.py pearipherals_support.py pearipherals_version.py scripts/write_build_manifest.py scripts/write_version_info.py tests/test_core.py tests/test_release.py tests/test_snipping.py tests/test_support.py
+        run: python -m py_compile pearipherals.py pearipherals_core.py magic_mouse_scroll.py pearipherals_snipping.py pearipherals_support.py pearipherals_version.py scripts/write_build_manifest.py scripts/write_version_info.py tests/test_core.py tests/test_release.py tests/test_snipping.py tests/test_support.py tests/test_magic_mouse_scroll.py
