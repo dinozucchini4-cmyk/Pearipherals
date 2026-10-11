@@ -95,13 +95,17 @@ normal DDC controls. A video-only USB-C-to-DisplayPort cable cannot carry the
 Studio Display's USB control data, so Pearipherals uses the available fallback in
 that setup.
 
-## Magic Keyboard and Magic Trackpad battery levels
+## Magic Keyboard, Magic Trackpad, and Magic Mouse battery levels
 
-Pearipherals shows the Apple Magic Keyboard and Magic Trackpad battery levels as
-separate entries in the tray menu. Battery polling is slow and isolated, and the
-app reopens devices for each poll instead of keeping Bluetooth HID handles open
-while a device sleeps. Polls run every five minutes while either device returns
-battery data, backing off to fifteen minutes when neither does.
+Pearipherals shows the Apple Magic Keyboard, Magic Trackpad, and Magic Mouse 2015
+battery levels as separate entries in the tray menu. Battery polling is slow and
+isolated, and the app reopens devices for each poll instead of keeping Bluetooth
+HID handles open while a device sleeps. Polls run every five minutes while any
+device returns battery data, backing off to fifteen minutes when none does.
+Magic Mouse v2 prefers Input report 0x90 and tries a read-only Feature 0x47
+fallback when the active HID collection does not expose the input report. That
+fallback is validated by unit tests but still requires physical confirmation on
+the Apple driver used on a particular Windows installation.
 
 Each device with a valid current battery reading has **low-battery Windows notifications at 20% or below**, with
 one **critical escalation at 5% or below**. The first fresh low reading after
