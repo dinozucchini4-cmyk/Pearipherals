@@ -51,6 +51,7 @@ from pearipherals_core import (
     CONFIG_LOCK,
     ConfigRecoveryRequired,
     HidBatteryBackend,
+    query_amt_ptp_driver_battery,
     TouchpadSettingsManager,
     contacts_are_stable,
     expire_stale_contacts,
@@ -2247,7 +2248,9 @@ def start_battery_worker():
         try:
             import hid as hidapi
             battery_poller = BatteryPoller(
-                HidBatteryBackend(hidapi), publish_battery_snapshot
+                HidBatteryBackend(hidapi),
+                publish_battery_snapshot,
+                trackpad_driver_battery_query=query_amt_ptp_driver_battery,
             )
             battery_thread = threading.Thread(
                 target=battery_poller.run, args=(battery_stop,), daemon=True,
