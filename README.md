@@ -115,15 +115,15 @@ Strength feature and queries only the report ID/length declared there. The
 descriptor-driven fallback is unit-tested but still requires physical
 confirmation on the Apple driver used on a particular Windows installation.
 
-For Magic Trackpad 2, battery polling first tries the ordinary HID battery
-collection. When the matching PID 0265 device is present but that HID path is
-unavailable, the app also tries the upstream
+For Magic Trackpad 2, battery polling first tries Input report `0x90`.
+If it is unavailable, the app inspects the HID descriptor for a declared
+Generic Device / Battery Strength Feature report, then tries the upstream
 `AmtPtpControlDeviceUm` `IOCTL_GET_BATTERY` interface documented by the
 [MagicTrackpad2ForWindows control panel source](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/blob/master/AmtPtpControlPanel/Main.cs).
 Only the GET_BATTERY request is issued; settings-reload requests and HID
-output/feature writes are not used. This fallback requires a driver version
-that exposes that control device, and still needs physical confirmation on the
-target installation.
+output/feature writes are not used. The driver fallback requires a version
+that exposes that control device. Both fallback routes still need physical
+confirmation on the target installation.
 
 Each device with a valid current battery reading has **low-battery Windows notifications at 20% or below**, with
 one **critical escalation at 5% or below**. The first fresh low reading after
