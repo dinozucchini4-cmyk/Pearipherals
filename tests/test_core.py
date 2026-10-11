@@ -17,6 +17,8 @@ from pearipherals_core import (
     BatterySnapshot,
     BatterySnapshotStore,
     HidBatteryBackend,
+    AMT_PTP_IOCTL_GET_BATTERY,
+    query_amt_ptp_driver_battery,
     _HIDP_CAPS,
     _HIDP_VALUE_CAPS,
     CONFIG_LOCK,
@@ -1593,6 +1595,48 @@ class BatteryTests(unittest.TestCase):
         self.assertEqual(64, ctypes.sizeof(_HIDP_CAPS))
         self.assertEqual(72, ctypes.sizeof(_HIDP_VALUE_CAPS))
         self.assertEqual(56, _HIDP_VALUE_CAPS.UsageMin.offset)
+
+    def test_amt_ptp_get_battery_ioctl_matches_upstream_control_panel(self):
+        # CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+        self.assertEqual(0x00222004, AMT_PTP_IOCTL_GET_BATTERY)
+
+    def test_trackpad_driver_battery_fallback_when_hid_report_is_not_exposed(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0265,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"trackpad-pointer"},
+        ]
+        backend = self.FakeHidBackend(devices, {})
+        calls = []
+        def driver_battery_query():
+            calls.append("GET_BATTERY")
+            return BatteryResult("available", 86)
+
+        published = []
+        poller = BatteryPoller(
+            backend, published.append, clock=lambda: 10.0,
+            trackpad_driver_battery_query=driver_battery_query,
+        )
+        snapshot, _ = poller.poll_once()
+
+        self.assertEqual(86, snapshot.trackpad.percentage)
+        self.assertEqual("available", snapshot.trackpad.status)
+        self.assertEqual(["GET_BATTERY"], calls)
+        self.assertIs(snapshot, published[0])
+
+    def test_trackpad_driver_battery_fallback_is_not_called_without_trackpad(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0267,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"keyboard"},
+        ]
+        backend = self.FakeHidBackend(devices, {b"keyboard": b"\x90\x00\x50"})
+        calls = []
+        poller = BatteryPoller(
+            backend, lambda snapshot: None, clock=lambda: 10.0,
+            trackpad_driver_battery_query=lambda: calls.append("unexpected"),
+        )
+        snapshot, _ = poller.poll_once()
+        self.assertEqual("not_detected", snapshot.trackpad.status)
+        self.assertEqual([], calls)
 
     def test_mouse_v2_parses_input_0x90_and_rejects_phantom_zero(self):
         self.assertEqual(
