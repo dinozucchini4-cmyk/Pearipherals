@@ -157,6 +157,7 @@ DEFAULTS = {"mac_fkeys": True, "brightness_step": 10,
             "natural_scroll": False,   # False = swipe down scrolls down (wheel style)
             "mouse_scroll_enabled": True,
             "mouse_natural_scroll": False,
+            "mouse_smooth_scroll": True,
             "mouse_scroll_speed": 32,  # 0..63; HID coordinate scale, default 32
             "tp_settings_applied": False,
             "current_version": None,
@@ -2175,6 +2176,7 @@ def start_mouse_scroll_service():
             enabled=lambda: bool(config_value("mouse_scroll_enabled", True)),
             natural=lambda: bool(config_value("mouse_natural_scroll", False)),
             speed=lambda: config_value("mouse_scroll_speed", 32),
+            smooth=lambda: bool(config_value("mouse_smooth_scroll", True)),
             log=append_error,
         )
         mouse_scroll_service.start()
@@ -2227,6 +2229,15 @@ def on_mouse_natural_scroll_toggle(icon, item):
     with CONFIG_LOCK:
         config["mouse_natural_scroll"] = not bool(
             config_value("mouse_natural_scroll", False)
+        )
+        save_config(config)
+    _update_menu(icon)
+
+
+def on_mouse_smooth_scroll_toggle(icon, item):
+    with CONFIG_LOCK:
+        config["mouse_smooth_scroll"] = not bool(
+            config_value("mouse_smooth_scroll", True)
         )
         save_config(config)
     _update_menu(icon)
@@ -2980,6 +2991,9 @@ def main():
                 pystray.MenuItem(
                     "Natural scrolling", on_mouse_natural_scroll_toggle,
                     checked=lambda i: bool(config_value("mouse_natural_scroll", False))),
+                pystray.MenuItem(
+                    "Smooth scrolling", on_mouse_smooth_scroll_toggle,
+                    checked=lambda i: bool(config_value("mouse_smooth_scroll", True))),
                 pystray.MenuItem("Scroll speed", pystray.Menu(
                     pystray.MenuItem("Slow", lambda icon, item: set_mouse_scroll_speed(icon, 16),
                                      radio=True, checked=lambda i: config_value("mouse_scroll_speed", 32) == 16),
@@ -2988,7 +3002,7 @@ def main():
                     pystray.MenuItem("Fast", lambda icon, item: set_mouse_scroll_speed(icon, 48),
                                      radio=True, checked=lambda i: config_value("mouse_scroll_speed", 32) == 48),
                 )),
-                pystray.MenuItem(mouse_scroll_status_label, None, enabled=False),
+                pystray.MenuItem(lambda item: mouse_scroll_status_label(), None, enabled=False),
             )),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
