@@ -17,6 +17,8 @@ from pearipherals_core import (
     BatterySnapshot,
     BatterySnapshotStore,
     HidBatteryBackend,
+    _HIDP_CAPS,
+    _HIDP_VALUE_CAPS,
     CONFIG_LOCK,
     ConfigRecoveryRequired,
     TouchpadSettingsManager,
@@ -1585,6 +1587,13 @@ class BatteryTests(unittest.TestCase):
         self.assertGreater(poller.failure_backoff, poller.normal_interval)
         self.assertEqual(poller.normal_interval, delay)
 
+    def test_native_hid_capability_layout_matches_windows_sdk(self):
+        # The descriptor fallback depends on native HIDP_VALUE_CAPS offsets.
+        # Windows x64 hidpi.h uses 64-byte HIDP_CAPS and 72-byte VALUE_CAPS.
+        self.assertEqual(64, ctypes.sizeof(_HIDP_CAPS))
+        self.assertEqual(72, ctypes.sizeof(_HIDP_VALUE_CAPS))
+        self.assertEqual(56, _HIDP_VALUE_CAPS.UsageMin.offset)
+
     def test_mouse_v2_parses_input_0x90_and_rejects_phantom_zero(self):
         self.assertEqual(
             BatteryResult("available", 64, True, False),
@@ -1644,6 +1653,26 @@ class BatteryTests(unittest.TestCase):
         self.assertEqual(
             [(b"mouse-pointer", 0x47, 2)], backend.feature_queries
         )
+
+    def test_mouse_v2_does_not_probe_feature_without_descriptor_capability(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-battery"},
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"mouse-pointer"},
+        ]
+        backend = self.FakeHidBackend(
+            devices,
+            {b"mouse-battery": OSError("Input 0x90 unavailable")},
+            {b"mouse-pointer": b"\\x47\\x50"},
+            # No descriptor evidence: Feature 0x47 must not be queried.
+        )
+        result = query_apple_mouse_battery(
+            backend.enumerate_devices, backend.request_report,
+            backend.request_feature_report, backend.feature_report_info,
+        )
+        self.assertEqual("unavailable", result.status)
+        self.assertEqual([], backend.feature_queries)
 
     def test_mouse_v2_does_not_accept_a_wrong_feature_response(self):
         devices = [
