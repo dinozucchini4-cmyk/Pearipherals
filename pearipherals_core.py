@@ -772,7 +772,7 @@ def query_amt_ptp_driver_battery():
 
 
 class BatteryPoller:
-    """Slow Apple HID battery poller with injected I/O and timing seams."""
+    """Slow Apple HID/control-device battery poller with injected I/O seams."""
 
     KEYBOARD_PID = 0x0267
     TRACKPAD_PID = 0x0265
