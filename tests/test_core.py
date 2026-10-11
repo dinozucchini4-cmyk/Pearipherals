@@ -1600,6 +1600,31 @@ class BatteryTests(unittest.TestCase):
         # CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
         self.assertEqual(0x00222004, AMT_PTP_IOCTL_GET_BATTERY)
 
+    def test_trackpad_uses_feature_battery_only_when_descriptor_declares_it(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0265,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"trackpad-pointer"},
+            {"vendor_id": 0x004C, "product_id": 0x0265,
+             "usage_page": 0x000D, "usage": 0x0005, "path": b"trackpad-ptp"},
+        ]
+        backend = self.FakeHidBackend(
+            devices,
+            {},
+            {b"trackpad-pointer": b"\\x47\\x58"},
+            {b"trackpad-pointer": (0x47, 2)},
+        )
+        result = query_apple_battery(
+            0x0265,
+            backend.enumerate_devices,
+            backend.request_report,
+            backend.request_feature_report,
+            backend.feature_report_info,
+        )
+        self.assertEqual(BatteryResult("available", 88), result)
+        self.assertEqual(
+            [(b"trackpad-pointer", 0x47, 2)], backend.feature_queries
+        )
+
     def test_trackpad_driver_battery_fallback_when_hid_report_is_not_exposed(self):
         devices = [
             {"vendor_id": 0x004C, "product_id": 0x0265,
