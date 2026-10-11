@@ -614,6 +614,91 @@ def format_battery_label(device_name, result):
     return label
 
 
+# Public read-only Bluetooth battery interface from the upstream
+# MagicTrackpad2ForWindows AmtPtpControlPanel source:
+# \\.\AmtPtpControlDeviceUm + IOCTL_GET_BATTERY (function 0x801,
+# FILE_DEVICE_UNKNOWN 0x22, METHOD_BUFFERED, FILE_ANY_ACCESS).
+def _ctl_code(device_type, function, method, access):
+    return (
+        (device_type << 16)
+        | (access << 14)
+        | (function << 2)
+        | method
+    )
+
+
+AMT_PTP_IOCTL_GET_BATTERY = _ctl_code(0x00000022, 0x801, 0, 0)
+
+
+def query_amt_ptp_driver_battery():
+    """Read Trackpad 2 battery through the driver's documented GET_BATTERY IOCTL.
+
+    This invokes only the upstream driver's GET_BATTERY request. It does not
+    invoke RELOAD_SETTINGS, write HID feature/output reports, or change state.
+    If the upstream control device is absent, unsupported, or returns an
+    invalid level, report an unavailable result instead of inventing a value.
+    """
+    if os.name != "nt":
+        return BatteryResult("unavailable")
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        device_io_control = kernel32.DeviceIoControl
+        device_io_control.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        device_io_control.restype = wintypes.BOOL
+    except Exception:
+        return BatteryResult("unavailable")
+
+    # Match the control panel's established sharing/desired-access contract.
+    # The only request sent from this app is GET_BATTERY, never its settings IOCTL.
+    handle = create_file(
+        r"\\.\AmtPtpControlDeviceUm",
+        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+        0x00000001 | 0x00000002,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+        None,
+        3,  # OPEN_EXISTING
+        0,
+        None,
+    )
+    handle_value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+    if handle_value is None or handle_value == ctypes.c_void_p(-1).value:
+        return BatteryResult("unavailable")
+
+    try:
+        output = ctypes.c_uint32(0)
+        returned = wintypes.DWORD(0)
+        ok = device_io_control(
+            handle,
+            AMT_PTP_IOCTL_GET_BATTERY,
+            None,
+            0,
+            ctypes.byref(output),
+            ctypes.sizeof(output),
+            ctypes.byref(returned),
+            None,
+        )
+        if not ok:
+            return BatteryResult("unavailable")
+        if returned.value < ctypes.sizeof(output) or output.value > 100:
+            return BatteryResult("unsupported")
+        return BatteryResult("available", percentage=int(output.value))
+    finally:
+        close_handle(handle)
+
+
 class BatteryPoller:
     """Slow Apple HID battery poller with injected I/O and timing seams."""
 
@@ -629,6 +714,7 @@ class BatteryPoller:
         normal_interval=300.0,
         failure_backoff=900.0,
         stale_after=600.0,
+        trackpad_driver_battery_query=None,
     ):
         if normal_interval < 180.0:
             raise ValueError("normal battery polling must be multi-minute")
@@ -640,6 +726,7 @@ class BatteryPoller:
         self.normal_interval = float(normal_interval)
         self.failure_backoff = float(failure_backoff)
         self.stale_after = float(stale_after)
+        self.trackpad_driver_battery_query = trackpad_driver_battery_query
         self._last_valid = {}
 
     def _with_stale_state(self, device, result, now):
@@ -669,6 +756,27 @@ class BatteryPoller:
             trackpad = query_apple_battery(
                 self.TRACKPAD_PID, enumerate_cycle, self.backend.request_report
             )
+            target_trackpad_present = any(
+                device.get("product_id") == self.TRACKPAD_PID
+                and (
+                    device.get("vendor_id") in (0x004C, 0x05AC)
+                    or "vid&0001004c" in str(device.get("path", "")).lower()
+                    or "vid&000205ac" in str(device.get("path", "")).lower()
+                    or "vid_05ac" in str(device.get("path", "")).lower()
+                )
+                for device in devices
+            )
+            if (
+                trackpad.status != "available"
+                and target_trackpad_present
+                and self.trackpad_driver_battery_query is not None
+            ):
+                try:
+                    driver_result = self.trackpad_driver_battery_query()
+                except Exception:
+                    driver_result = BatteryResult("unavailable")
+                if driver_result.status == "available":
+                    trackpad = driver_result
             mouse = query_apple_mouse_battery(
                 enumerate_cycle,
                 self.backend.request_report,
