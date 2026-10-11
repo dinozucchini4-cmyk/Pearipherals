@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 _SAVE_LOCK = threading.Lock()
@@ -186,6 +186,9 @@ class BatterySnapshot:
     keyboard: BatteryResult
     trackpad: BatteryResult
     captured_at: float
+    # Keep the original three positional arguments stable for existing callers/tests.
+    # Mouse support is additive; older code gets a harmless loading state by default.
+    mouse: BatteryResult = field(default_factory=lambda: BatteryResult("loading"))
 
 
 class BatterySnapshotStore:
@@ -224,7 +227,8 @@ class BatteryAlertPolicy:
             return ()
         alerts = []
         for device, result in (("Magic Keyboard", snapshot.keyboard),
-                               ("Magic Trackpad", snapshot.trackpad)):
+                               ("Magic Trackpad", snapshot.trackpad),
+                               ("Magic Mouse", snapshot.mouse)):
             if (result.status != "available" or result.stale
                     or type(result.percentage) is not int
                     or not 0 <= result.percentage <= 100):
@@ -259,6 +263,15 @@ class HidBatteryBackend:
         try:
             handle.open_path(path)
             return bytes(handle.get_input_report(0x90, 3))
+        finally:
+            handle.close()
+
+    def request_feature_report(self, path, report_id, length=2):
+        """Read one descriptor-selected feature report; never sends a report."""
+        handle = self._hid.device()
+        try:
+            handle.open_path(path)
+            return bytes(handle.get_feature_report(report_id, length))
         finally:
             handle.close()
 
@@ -311,6 +324,104 @@ def query_apple_battery(product_id, enumerate_devices, request_report):
     return BatteryResult("unavailable")
 
 
+def parse_apple_mouse_input_report(report):
+    """Parse Magic Mouse v2 Input 0x90; reject a phantom zero-percent response."""
+    raw = bytes(report)
+    if len(raw) < 3 or raw[0] != 0x90:
+        raise ValueError("unexpected Magic Mouse input report")
+    if not 1 <= raw[2] <= 100:
+        raise ValueError("Magic Mouse battery percentage is outside 1..100")
+    return BatteryResult(
+        "available",
+        percentage=raw[2],
+        charging=bool(raw[1] & 0x02),
+        fully_charged=bool(raw[1] & 0x04),
+    )
+
+
+def parse_apple_mouse_feature_report(report):
+    """Parse Generic Device Battery Strength Feature 0x47 on Magic Mouse v2."""
+    raw = bytes(report)
+    if len(raw) < 2 or raw[0] != 0x47:
+        raise ValueError("unexpected Magic Mouse feature report")
+    if not 1 <= raw[1] <= 100:
+        raise ValueError("Magic Mouse feature battery percentage is outside 1..100")
+    # Report 0x47 exposes percentage only here; do not infer charge state.
+    return BatteryResult("available", percentage=raw[1])
+
+
+def query_apple_mouse_battery(
+    enumerate_devices, request_input_report, request_feature_report=None
+):
+    """Read Magic Mouse v2 battery without changing or binding any driver.
+
+    Prefer the known vendor battery collection (Input 0x90). If the active
+    driver instead exposes a Generic Device Battery Strength feature, try
+    Feature 0x47 on the device's own HID collections. This fallback is confined
+    to PID 0x0269 and accepted only when both report ID and percentage validate.
+    """
+    targets = [
+        device
+        for device in (enumerate_devices() or [])
+        if device.get("vendor_id") in (0x004C, 0x05AC)
+        and device.get("product_id") == 0x0269
+        and device.get("path") is not None
+    ]
+    if not targets:
+        return BatteryResult("not_detected")
+
+    vendor_battery = [
+        device for device in targets
+        if device.get("usage_page") == 0xFF00 and device.get("usage") == 0x14
+    ]
+    pointer_collections = [
+        device for device in targets
+        if device.get("usage_page") == 0x0001 and device.get("usage") == 0x0002
+    ]
+
+    had_failure = False
+    had_invalid = False
+    for device in vendor_battery:
+        try:
+            report = request_input_report(device["path"])
+        except Exception:
+            had_failure = True
+            continue
+        try:
+            return parse_apple_mouse_input_report(report)
+        except (TypeError, ValueError):
+            had_invalid = True
+
+    if request_feature_report is not None:
+        # Prefer the ordinary mouse collection. If its driver exposes the
+        # battery feature on another collection, probing stays limited to this
+        # exact PID and fixed, read-only Feature report ID 0x47.
+        feature_candidates = pointer_collections + [
+            d for d in targets if d not in pointer_collections
+        ]
+        seen_paths = set()
+        for device in feature_candidates:
+            path = device["path"]
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                report = request_feature_report(path, 0x47, 2)
+            except Exception:
+                had_failure = True
+                continue
+            try:
+                return parse_apple_mouse_feature_report(report)
+            except (TypeError, ValueError):
+                had_invalid = True
+
+    if had_failure:
+        return BatteryResult("unavailable")
+    if had_invalid or targets:
+        return BatteryResult("unsupported")
+    return BatteryResult("not_detected")
+
+
 def format_battery_label(device_name, result):
     """Return concise dynamic tray text for every battery state."""
     prefix = f"{device_name} battery: "
@@ -334,10 +445,11 @@ def format_battery_label(device_name, result):
 
 
 class BatteryPoller:
-    """Slow two-device battery poller with injected HID and timing seams."""
+    """Slow Apple HID battery poller with injected I/O and timing seams."""
 
     KEYBOARD_PID = 0x0267
     TRACKPAD_PID = 0x0265
+    MOUSE_PID = 0x0269
 
     def __init__(
         self,
@@ -378,7 +490,7 @@ class BatteryPoller:
         try:
             devices = list(self.backend.enumerate_devices() or [])
         except Exception:
-            keyboard = trackpad = BatteryResult("unavailable")
+            keyboard = trackpad = mouse = BatteryResult("unavailable")
         else:
             enumerate_cycle = lambda: devices
             keyboard = query_apple_battery(
@@ -387,13 +499,21 @@ class BatteryPoller:
             trackpad = query_apple_battery(
                 self.TRACKPAD_PID, enumerate_cycle, self.backend.request_report
             )
+            mouse = query_apple_mouse_battery(
+                enumerate_cycle,
+                self.backend.request_report,
+                getattr(self.backend, "request_feature_report", None),
+            )
         keyboard = self._with_stale_state("keyboard", keyboard, now)
         trackpad = self._with_stale_state("trackpad", trackpad, now)
-        snapshot = BatterySnapshot(keyboard, trackpad, now)
+        mouse = self._with_stale_state("mouse", mouse, now)
+        snapshot = BatterySnapshot(keyboard, trackpad, now, mouse)
         self.publish(snapshot)
         delay = (
             self.normal_interval
-            if "available" in (keyboard.status, trackpad.status)
+            if "available" in (
+                keyboard.status, trackpad.status, mouse.status
+            )
             else self.failure_backoff
         )
         return snapshot, delay
