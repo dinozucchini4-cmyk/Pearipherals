@@ -2,6 +2,7 @@
 
 import unittest
 
+from pearipherals_core import BatteryPoller
 from magic_mouse_scroll import (
     MAGIC_MOUSE_2015_PID,
     APPLE_VID,
@@ -71,6 +72,39 @@ class MagicMouseReportTests(unittest.TestCase):
              "usage_page": 0xFF00, "usage": 0x14}
         )
         self.assertEqual(devices[-1]["path"], select_magic_mouse_touch_path(devices))
+
+
+class MagicMouseBatteryIntegrationTests(unittest.TestCase):
+    def test_battery_poller_queries_mouse_0269_alongside_keyboard_and_trackpad(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0267,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"keyboard"},
+            {"vendor_id": 0x004C, "product_id": 0x0265,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"trackpad"},
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse"},
+        ]
+        reports = {
+            b"keyboard": bytes((0x90, 0x00, 80)),
+            b"trackpad": bytes((0x90, 0x00, 92)),
+            b"mouse": bytes((0x90, 0x00, 69)),
+        }
+        class Backend:
+            def enumerate_devices(self):
+                return list(devices)
+
+            def request_report(self, path):
+                return reports[path]
+
+        published = []
+        snapshot, _delay = BatteryPoller(
+            Backend(), published.append, clock=lambda: 10.0
+        ).poll_once()
+        self.assertEqual(80, snapshot.keyboard.percentage)
+        self.assertEqual(92, snapshot.trackpad.percentage)
+        self.assertIsNotNone(snapshot.mouse)
+        self.assertEqual(69, snapshot.mouse.percentage)
+        self.assertIs(snapshot, published[0])
 
 
 class MagicMouseScrollEngineTests(unittest.TestCase):
