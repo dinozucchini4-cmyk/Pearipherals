@@ -24,7 +24,10 @@ from pearipherals_core import (
     is_target_trackpad_path,
     load_json_config,
     parse_apple_battery_report,
+    parse_apple_mouse_input_report,
+    parse_apple_mouse_feature_report,
     query_apple_battery,
+    query_apple_mouse_battery,
     read_optional_value,
     release_custom_input,
     require_single_input,
@@ -1523,11 +1526,13 @@ class BatteryTests(unittest.TestCase):
         return InputLifecycleTests._load_app_definition(name, globals_)
 
     class FakeHidBackend:
-        def __init__(self, devices, reports):
+        def __init__(self, devices, reports, features=None):
             self.devices = devices
             self.reports = reports
+            self.features = features or {}
             self.enumerations = 0
             self.queries = []
+            self.feature_queries = []
 
         def enumerate_devices(self):
             self.enumerations += 1
@@ -1536,6 +1541,13 @@ class BatteryTests(unittest.TestCase):
         def request_report(self, path):
             self.queries.append(path)
             value = self.reports[path]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        def request_feature_report(self, path, report_id, length=2):
+            self.feature_queries.append((path, report_id, length))
+            value = self.features[path]
             if isinstance(value, Exception):
                 raise value
             return value
@@ -1565,6 +1577,96 @@ class BatteryTests(unittest.TestCase):
         self.assertGreaterEqual(poller.normal_interval, 180.0)
         self.assertGreater(poller.failure_backoff, poller.normal_interval)
         self.assertEqual(poller.normal_interval, delay)
+
+    def test_mouse_v2_parses_input_0x90_and_rejects_phantom_zero(self):
+        self.assertEqual(
+            BatteryResult("available", 64, True, False),
+            parse_apple_mouse_input_report(b"\x90\x02\x40"),
+        )
+        with self.assertRaises(ValueError):
+            parse_apple_mouse_input_report(b"\x90\x00\x00")
+        with self.assertRaises(ValueError):
+            parse_apple_mouse_input_report(b"\x47\x40")
+        self.assertEqual(
+            BatteryResult("available", 53),
+            parse_apple_mouse_feature_report(b"\x47\x35"),
+        )
+        with self.assertRaises(ValueError):
+            parse_apple_mouse_feature_report(b"\x90\x00\x35")
+        with self.assertRaises(ValueError):
+            parse_apple_mouse_feature_report(b"\x47\x00")
+
+    def test_mouse_v2_prefers_input_0x90_when_available(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-battery"},
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"mouse-pointer"},
+        ]
+        backend = self.FakeHidBackend(
+            devices,
+            {b"mouse-battery": b"\x90\x02\x46"},
+            {b"mouse-pointer": b"\x47\x32"},
+        )
+        result = query_apple_mouse_battery(
+            backend.enumerate_devices, backend.request_report,
+            backend.request_feature_report,
+        )
+        self.assertEqual(BatteryResult("available", 70, True, False), result)
+        self.assertEqual([b"mouse-battery"], backend.queries)
+        self.assertEqual([], backend.feature_queries)
+
+    def test_mouse_v2_uses_feature_0x47_when_input_0x90_is_unavailable(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-battery"},
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"mouse-pointer"},
+        ]
+        backend = self.FakeHidBackend(
+            devices,
+            {b"mouse-battery": OSError("Input 0x90 not exposed")},
+            {b"mouse-pointer": b"\x47\x3a"},
+        )
+        result = query_apple_mouse_battery(
+            backend.enumerate_devices, backend.request_report,
+            backend.request_feature_report,
+        )
+        self.assertEqual(BatteryResult("available", 58), result)
+        self.assertEqual(
+            [(b"mouse-pointer", 0x47, 2)], backend.feature_queries
+        )
+
+    def test_mouse_v2_does_not_accept_a_wrong_feature_response(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-battery"},
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0x0001, "usage": 0x0002, "path": b"mouse-pointer"},
+        ]
+        backend = self.FakeHidBackend(
+            devices,
+            {b"mouse-battery": OSError("Input 0x90 unavailable")},
+            {b"mouse-pointer": b"\x90\x00\x55"},
+        )
+        result = query_apple_mouse_battery(
+            backend.enumerate_devices, backend.request_report,
+            backend.request_feature_report,
+        )
+        self.assertNotEqual("available", result.status)
+
+    def test_mouse_v2_query_ignores_other_products(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0323,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-v3"},
+        ]
+        backend = self.FakeHidBackend(devices, {b"mouse-v3": b"\x90\x00\x40"})
+        result = query_apple_mouse_battery(
+            backend.enumerate_devices, backend.request_report,
+            backend.request_feature_report,
+        )
+        self.assertEqual("not_detected", result.status)
+        self.assertEqual([], backend.queries)
 
     def test_hid_backend_closes_every_open_handle_even_when_query_fails(self):
         events = []
@@ -1614,6 +1716,21 @@ class BatteryTests(unittest.TestCase):
         self.assertEqual(
             [("open", b"fresh-path"), ("query", 0x90, 3), ("close",)], events
         )
+
+    def test_mouse_v2_is_included_in_the_complete_battery_snapshot(self):
+        devices = [
+            {"vendor_id": 0x004C, "product_id": 0x0269,
+             "usage_page": 0xFF00, "usage": 0x14, "path": b"mouse-battery"},
+        ]
+        backend = self.FakeHidBackend(devices, {b"mouse-battery": b"\x90\x00\x3f"})
+        published = []
+        snapshot, _ = BatteryPoller(
+            backend, published.append, clock=lambda: 10.0
+        ).poll_once()
+        self.assertEqual(63, snapshot.mouse.percentage)
+        self.assertEqual("not_detected", snapshot.keyboard.status)
+        self.assertEqual("not_detected", snapshot.trackpad.status)
+        self.assertIs(snapshot, published[0])
 
     def test_repeated_poll_cycles_reenumerate_and_use_fresh_device_paths(self):
         paths = iter((b"keyboard-old", b"keyboard-new"))
