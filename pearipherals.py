@@ -51,6 +51,7 @@ from pearipherals_core import (
     CONFIG_LOCK,
     ConfigRecoveryRequired,
     HidBatteryBackend,
+    query_amt_ptp_driver_battery,
     TouchpadSettingsManager,
     contacts_are_stable,
     expire_stale_contacts,
@@ -2182,11 +2183,57 @@ def notify_battery_alerts(icon):
 def battery_menu_label(device):
     """Read a complete snapshot when pystray evaluates a dynamic menu title."""
     snapshot = battery_snapshots.snapshot()
+    if device == "mouse":
+        return format_battery_label("Magic Mouse", snapshot.mouse)
     if device == "keyboard":
         return format_battery_label("Magic Keyboard", snapshot.keyboard)
     if device == "trackpad":
         return format_battery_label("Magic Trackpad", snapshot.trackpad)
     raise ValueError(f"unknown battery device: {device}")
+
+
+MOUSE_SCROLL_DRIVER_URL = (
+    "https://github.com/dinozucchini4-cmyk/"
+    "Apple-Input-Device-Drivers-Windows-10-11/tree/master/AppleWirelessMouse"
+)
+TRACKPAD_DRIVER_URL = (
+    "https://github.com/vitoplantamura/"
+    "MagicTrackpad2ForWindows/releases/tag/v2.0"
+)
+
+
+def on_mouse_scroll_guide(icon, item):
+    """Open the user-reviewed Apple driver package page; never install a driver."""
+    _ = item
+    try:
+        opened = webbrowser.open(MOUSE_SCROLL_DRIVER_URL)
+    except Exception as exc:
+        append_error(f"Magic Mouse scroll guide could not open: {exc}")
+        opened = False
+    if not opened:
+        _notify(
+            icon,
+            "The browser could not be opened. The driver guide is in the "
+            "AppleWirelessMouse folder of the Apple Input Device Drivers repository.",
+            "Magic Mouse scroll guide",
+        )
+
+
+def on_trackpad_driver_guide(icon, item):
+    """Open the signed Magic Trackpad 2 driver release; never install it here."""
+    _ = item
+    try:
+        opened = webbrowser.open(TRACKPAD_DRIVER_URL)
+    except Exception as exc:
+        append_error(f"Magic Trackpad driver guide could not open: {exc}")
+        opened = False
+    if not opened:
+        _notify(
+            icon,
+            "The browser could not be opened. Find MagicTrackpad2ForWindows v2.0 "
+            "in the upstream project's Releases page.",
+            "Magic Trackpad 2 driver guide",
+        )
 
 
 def start_battery_worker():
@@ -2201,7 +2248,9 @@ def start_battery_worker():
         try:
             import hid as hidapi
             battery_poller = BatteryPoller(
-                HidBatteryBackend(hidapi), publish_battery_snapshot
+                HidBatteryBackend(hidapi),
+                publish_battery_snapshot,
+                trackpad_driver_battery_query=query_amt_ptp_driver_battery,
             )
             battery_thread = threading.Thread(
                 target=battery_poller.run, args=(battery_stop,), daemon=True,
@@ -2214,7 +2263,9 @@ def start_battery_worker():
             battery_poller = None
             unavailable = BatteryResult("unavailable")
             publish_battery_snapshot(
-                BatterySnapshot(unavailable, unavailable, time.monotonic())
+                BatterySnapshot(
+                    unavailable, unavailable, time.monotonic(), unavailable
+                )
             )
             append_error(f"Battery worker startup failed: {exc}")
 
@@ -2893,11 +2944,18 @@ def main():
                              checked=lambda i: tp_settings.natural_scroll_get()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
+                lambda item: battery_menu_label("mouse"),
+                None, enabled=False),
+            pystray.MenuItem(
                 lambda item: battery_menu_label("keyboard"),
                 None, enabled=False),
             pystray.MenuItem(
                 lambda item: battery_menu_label("trackpad"),
                 None, enabled=False),
+            pystray.MenuItem(
+                "Magic Mouse scrolling setup guide", on_mouse_scroll_guide),
+            pystray.MenuItem(
+                "Magic Trackpad 2 signed driver guide", on_trackpad_driver_guide),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Touchpad settings", pystray.Menu(
                 pystray.MenuItem(

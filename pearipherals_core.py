@@ -1,12 +1,14 @@
 """Pure, testable core helpers for Pearipherals."""
 
+import ctypes
+import ctypes.wintypes as wintypes
 import json
 import os
 import tempfile
 import threading
 import time
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 _SAVE_LOCK = threading.Lock()
@@ -186,6 +188,9 @@ class BatterySnapshot:
     keyboard: BatteryResult
     trackpad: BatteryResult
     captured_at: float
+    # Keep the original three positional arguments stable for existing callers/tests.
+    # Mouse support is additive; older code gets a harmless loading state by default.
+    mouse: BatteryResult = field(default_factory=lambda: BatteryResult("loading"))
 
 
 class BatterySnapshotStore:
@@ -224,7 +229,8 @@ class BatteryAlertPolicy:
             return ()
         alerts = []
         for device, result in (("Magic Keyboard", snapshot.keyboard),
-                               ("Magic Trackpad", snapshot.trackpad)):
+                               ("Magic Trackpad", snapshot.trackpad),
+                               ("Magic Mouse", snapshot.mouse)):
             if (result.status != "available" or result.stale
                     or type(result.percentage) is not int
                     or not 0 <= result.percentage <= 100):
@@ -245,6 +251,152 @@ class BatteryAlertPolicy:
         self._pending = {}
 
 
+class _HIDP_CAPS(ctypes.Structure):
+    _fields_ = [
+        ("Usage", ctypes.c_ushort),
+        ("UsagePage", ctypes.c_ushort),
+        ("InputReportByteLength", ctypes.c_ushort),
+        ("OutputReportByteLength", ctypes.c_ushort),
+        ("FeatureReportByteLength", ctypes.c_ushort),
+        ("Reserved", ctypes.c_ushort * 17),
+        ("NumberLinkCollectionNodes", ctypes.c_ushort),
+        ("NumberInputButtonCaps", ctypes.c_ushort),
+        ("NumberInputValueCaps", ctypes.c_ushort),
+        ("NumberInputDataIndices", ctypes.c_ushort),
+        ("NumberOutputButtonCaps", ctypes.c_ushort),
+        ("NumberOutputValueCaps", ctypes.c_ushort),
+        ("NumberOutputDataIndices", ctypes.c_ushort),
+        ("NumberFeatureButtonCaps", ctypes.c_ushort),
+        ("NumberFeatureValueCaps", ctypes.c_ushort),
+        ("NumberFeatureDataIndices", ctypes.c_ushort),
+    ]
+
+
+class _HIDP_VALUE_CAPS(ctypes.Structure):
+    # Mirrors hidpi.h HIDP_VALUE_CAPS with Pack=4. For IsRange=False,
+    # UsageMin occupies the union slot called Usage in the native structure.
+    _pack_ = 4
+    _fields_ = [
+        ("UsagePage", ctypes.c_ushort),
+        ("ReportID", ctypes.c_ubyte),
+        ("IsAlias", ctypes.c_ubyte),
+        ("BitField", ctypes.c_ushort),
+        ("LinkCollection", ctypes.c_ushort),
+        ("LinkUsage", ctypes.c_ushort),
+        ("LinkUsagePage", ctypes.c_ushort),
+        ("IsRange", ctypes.c_ubyte),
+        ("IsStringRange", ctypes.c_ubyte),
+        ("IsDesignatorRange", ctypes.c_ubyte),
+        ("IsAbsolute", ctypes.c_ubyte),
+        ("HasNull", ctypes.c_ubyte),
+        ("Reserved", ctypes.c_ubyte),
+        ("BitSize", ctypes.c_ushort),
+        ("ReportCount", ctypes.c_ushort),
+        ("Reserved1", ctypes.c_ushort),
+        ("Reserved2", ctypes.c_ushort),
+        ("Reserved3", ctypes.c_ushort),
+        ("Reserved4", ctypes.c_ushort),
+        ("Reserved5", ctypes.c_ushort),
+        ("UnitsExp", ctypes.c_uint),
+        ("Units", ctypes.c_uint),
+        ("LogicalMin", wintypes.LONG),
+        ("LogicalMax", wintypes.LONG),
+        ("PhysicalMin", wintypes.LONG),
+        ("PhysicalMax", wintypes.LONG),
+        ("UsageMin", ctypes.c_ushort),
+        ("UsageMax", ctypes.c_ushort),
+        ("StringMin", ctypes.c_ushort),
+        ("StringMax", ctypes.c_ushort),
+        ("DesignatorMin", ctypes.c_ushort),
+        ("DesignatorMax", ctypes.c_ushort),
+        ("DataIndexMin", ctypes.c_ushort),
+        ("DataIndexMax", ctypes.c_ushort),
+    ]
+
+
+def discover_generic_battery_feature(path):
+    """Return (report_id, report_length) only if HID capabilities declare
+    Generic Device / Battery Strength (Usage Page 0x0006, Usage 0x0020)
+    as a FEATURE value capability on this exact HID collection.
+
+    The probe only opens a HID handle for descriptor inspection. It does not
+    write output or feature reports, change drivers, or modify the registry.
+    """
+    if os.name != "nt":
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    hid = ctypes.WinDLL("hid", use_last_error=True)
+
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    get_preparsed = hid.HidD_GetPreparsedData
+    get_preparsed.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+    get_preparsed.restype = wintypes.BOOL
+    free_preparsed = hid.HidD_FreePreparsedData
+    free_preparsed.argtypes = [ctypes.c_void_p]
+    free_preparsed.restype = wintypes.BOOL
+    get_caps = hid.HidP_GetCaps
+    get_caps.argtypes = [ctypes.c_void_p, ctypes.POINTER(_HIDP_CAPS)]
+    get_caps.restype = wintypes.LONG
+    get_value_caps = hid.HidP_GetValueCaps
+    get_value_caps.argtypes = [
+        ctypes.c_int, ctypes.POINTER(_HIDP_VALUE_CAPS),
+        ctypes.POINTER(ctypes.c_ushort), ctypes.c_void_p,
+    ]
+    get_value_caps.restype = wintypes.LONG
+
+    device_path = os.fsdecode(path)
+    handle = create_file(
+        device_path, 0, 0x00000001 | 0x00000002, None, 3, 0, None
+    )
+    handle_value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle_value is None or handle_value == invalid_handle:
+        return None
+
+    preparsed = ctypes.c_void_p()
+    try:
+        if not get_preparsed(handle, ctypes.byref(preparsed)):
+            return None
+
+        caps = _HIDP_CAPS()
+        if get_caps(preparsed, ctypes.byref(caps)) != 0x00110000:
+            return None
+        count_value = int(caps.NumberFeatureValueCaps)
+        feature_length = int(caps.FeatureReportByteLength)
+        if count_value <= 0 or feature_length < 2:
+            return None
+
+        array_type = _HIDP_VALUE_CAPS * count_value
+        value_caps = array_type()
+        count = ctypes.c_ushort(count_value)
+        if get_value_caps(2, value_caps, ctypes.byref(count), preparsed) != 0x00110000:
+            return None
+
+        for cap in value_caps[:count.value]:
+            if (
+                cap.IsRange == 0
+                and cap.UsagePage == 0x0006
+                and cap.UsageMin == 0x0020
+                and cap.ReportID >= 0
+            ):
+                return int(cap.ReportID), feature_length
+        return None
+    finally:
+        if preparsed.value:
+            free_preparsed(preparsed)
+        close_handle(handle)
+
+
 class HidBatteryBackend:
     """Small injected hidapi adapter with one handle lifetime per query."""
 
@@ -259,6 +411,19 @@ class HidBatteryBackend:
         try:
             handle.open_path(path)
             return bytes(handle.get_input_report(0x90, 3))
+        finally:
+            handle.close()
+
+    def feature_report_info(self, path):
+        """Inspect the collection descriptor; do not guess a feature report ID."""
+        return discover_generic_battery_feature(path)
+
+    def request_feature_report(self, path, report_id, length):
+        """Read one descriptor-selected feature report; never sends a report."""
+        handle = self._hid.device()
+        try:
+            handle.open_path(path)
+            return bytes(handle.get_feature_report(report_id, length))
         finally:
             handle.close()
 
@@ -280,22 +445,42 @@ def parse_apple_battery_report(report):
     )
 
 
-def query_apple_battery(product_id, enumerate_devices, request_report):
-    """Query one exact Apple vendor HID collection through injected I/O."""
-    candidates = [
+def query_apple_battery(
+    product_id,
+    enumerate_devices,
+    request_report,
+    request_feature_report=None,
+    feature_report_info=None,
+):
+    """Read an Apple keyboard/trackpad battery using only descriptor-backed reports.
+
+    Prefer Input 0x90 from the Apple vendor battery collection. If that input
+    collection is not exposed by the active function driver, a Feature report
+    is queried only when the same HID collection's descriptor declares Generic
+    Device / Battery Strength (Usage Page 0x0006, Usage 0x0020).
+    """
+    targets = [
         device
         for device in (enumerate_devices() or [])
-        if device.get("vendor_id") == 0x004C
+        if device.get("vendor_id") in (0x004C, 0x05AC)
         and device.get("product_id") == product_id
-        and device.get("usage_page") == 0xFF00
-        and device.get("usage") == 0x14
+        and device.get("path") is not None
     ]
-    if not candidates:
+    if not targets:
+        return BatteryResult("not_detected")
+
+    input_candidates = [
+        device for device in targets
+        if device.get("usage_page") == 0xFF00 and device.get("usage") == 0x14
+    ]
+    if not input_candidates and (
+        request_feature_report is None or feature_report_info is None
+    ):
         return BatteryResult("not_detected")
 
     had_query_failure = False
     had_malformed_report = False
-    for device in candidates:
+    for device in input_candidates:
         try:
             report = request_report(device["path"])
         except Exception:
@@ -306,9 +491,177 @@ def query_apple_battery(product_id, enumerate_devices, request_report):
         except (TypeError, ValueError):
             had_malformed_report = True
 
-    if had_malformed_report and not had_query_failure:
+    if request_feature_report is not None and feature_report_info is not None:
+        # Prefer a normal mouse/pointer collection, then inspect other HID
+        # collections for this exact Apple VID/PID. No fixed report ID.
+        feature_candidates = sorted(
+            targets,
+            key=lambda d: 0 if (
+                d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002
+            ) else 1,
+        )
+        seen_paths = set()
+        for device in feature_candidates:
+            path = device["path"]
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                info = feature_report_info(path)
+            except Exception:
+                had_query_failure = True
+                continue
+            if (
+                not isinstance(info, (tuple, list))
+                or len(info) != 2
+                or type(info[0]) is not int
+                or type(info[1]) is not int
+                or info[0] < 0
+                or info[1] < 2
+            ):
+                continue
+
+            report_id, report_length = info
+            try:
+                feature_report = request_feature_report(
+                    path, report_id, report_length
+                )
+            except Exception:
+                had_query_failure = True
+                continue
+            try:
+                return parse_apple_battery_feature_report(
+                    feature_report, report_id
+                )
+            except (TypeError, ValueError):
+                had_malformed_report = True
+
+    if had_query_failure:
+        return BatteryResult("unavailable")
+    if had_malformed_report or targets:
         return BatteryResult("unsupported")
-    return BatteryResult("unavailable")
+    return BatteryResult("not_detected")
+
+
+def parse_apple_mouse_input_report(report):
+    """Parse Magic Mouse v2 Input 0x90; reject a phantom zero-percent response."""
+    raw = bytes(report)
+    if len(raw) < 3 or raw[0] != 0x90:
+        raise ValueError("unexpected Magic Mouse input report")
+    if not 1 <= raw[2] <= 100:
+        raise ValueError("Magic Mouse battery percentage is outside 1..100")
+    return BatteryResult(
+        "available",
+        percentage=raw[2],
+        charging=bool(raw[1] & 0x02),
+        fully_charged=bool(raw[1] & 0x04),
+    )
+
+
+def parse_apple_battery_feature_report(report, expected_report_id):
+    """Parse descriptor-selected Generic Device Battery Strength Feature data."""
+    raw = bytes(report)
+    if len(raw) < 2 or raw[0] != expected_report_id:
+        raise ValueError("unexpected battery feature report ID")
+    if not 1 <= raw[1] <= 100:
+        raise ValueError("battery feature percentage is outside 1..100")
+    # Feature report exposes percentage only; do not infer charge state.
+    return BatteryResult("available", percentage=raw[1])
+
+
+def parse_apple_mouse_feature_report(report, expected_report_id):
+    """Compatibility wrapper for Magic Mouse-specific tests/callers."""
+    return parse_apple_battery_feature_report(report, expected_report_id)
+
+
+def query_apple_mouse_battery(
+    enumerate_devices,
+    request_input_report,
+    request_feature_report=None,
+    feature_report_info=None,
+):
+    """Read Magic Mouse v2 battery without changing or binding any driver.
+
+    Prefer Input 0x90 on its known vendor battery collection. If this is not
+    exposed, read Feature only when the same HID collection's descriptor
+    advertises Generic Device / Battery Strength (0x0006/0x0020). The report ID
+    and length come from the descriptor, never a guessed IOCTL or write.
+    """
+    targets = [
+        device
+        for device in (enumerate_devices() or [])
+        if device.get("vendor_id") in (0x004C, 0x05AC)
+        and device.get("product_id") == 0x0269
+        and device.get("path") is not None
+    ]
+    if not targets:
+        return BatteryResult("not_detected")
+
+    vendor_battery = [
+        device for device in targets
+        if device.get("usage_page") == 0xFF00 and device.get("usage") == 0x14
+    ]
+    pointer_collections = [
+        device for device in targets
+        if device.get("usage_page") == 0x0001 and device.get("usage") == 0x0002
+    ]
+
+    had_failure = False
+    had_invalid = False
+    for device in vendor_battery:
+        try:
+            report = request_input_report(device["path"])
+        except Exception:
+            had_failure = True
+            continue
+        try:
+            return parse_apple_mouse_input_report(report)
+        except (TypeError, ValueError):
+            had_invalid = True
+
+    if request_feature_report is not None and feature_report_info is not None:
+        # Inspect the ordinary mouse collection first, then other collections
+        # of this exact PID. Only a descriptor-declared battery FEATURE is read.
+        feature_candidates = pointer_collections + [
+            d for d in targets if d not in pointer_collections
+        ]
+        seen_paths = set()
+        for device in feature_candidates:
+            path = device["path"]
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                info = feature_report_info(path)
+            except Exception:
+                had_failure = True
+                continue
+            if (
+                not isinstance(info, (tuple, list))
+                or len(info) != 2
+                or type(info[0]) is not int
+                or type(info[1]) is not int
+                or info[0] < 0
+                or info[1] < 2
+            ):
+                continue
+
+            report_id, report_length = info
+            try:
+                report = request_feature_report(path, report_id, report_length)
+            except Exception:
+                had_failure = True
+                continue
+            try:
+                return parse_apple_mouse_feature_report(report, report_id)
+            except (TypeError, ValueError):
+                had_invalid = True
+
+    if had_failure:
+        return BatteryResult("unavailable")
+    if had_invalid or targets:
+        return BatteryResult("unsupported")
+    return BatteryResult("not_detected")
 
 
 def format_battery_label(device_name, result):
@@ -333,11 +686,97 @@ def format_battery_label(device_name, result):
     return label
 
 
+# Public read-only Bluetooth battery interface from the upstream
+# MagicTrackpad2ForWindows AmtPtpControlPanel source:
+# \\.\AmtPtpControlDeviceUm + IOCTL_GET_BATTERY (function 0x801,
+# FILE_DEVICE_UNKNOWN 0x22, METHOD_BUFFERED, FILE_ANY_ACCESS).
+def _ctl_code(device_type, function, method, access):
+    return (
+        (device_type << 16)
+        | (access << 14)
+        | (function << 2)
+        | method
+    )
+
+
+AMT_PTP_IOCTL_GET_BATTERY = _ctl_code(0x00000022, 0x801, 0, 0)
+
+
+def query_amt_ptp_driver_battery():
+    """Read Trackpad 2 battery through the driver's documented GET_BATTERY IOCTL.
+
+    This invokes only the upstream driver's GET_BATTERY request. It does not
+    invoke RELOAD_SETTINGS, write HID feature/output reports, or change state.
+    If the upstream control device is absent, unsupported, or returns an
+    invalid level, report an unavailable result instead of inventing a value.
+    """
+    if os.name != "nt":
+        return BatteryResult("unavailable")
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        device_io_control = kernel32.DeviceIoControl
+        device_io_control.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        device_io_control.restype = wintypes.BOOL
+    except Exception:
+        return BatteryResult("unavailable")
+
+    # Match the control panel's established sharing/desired-access contract.
+    # The only request sent from this app is GET_BATTERY, never its settings IOCTL.
+    handle = create_file(
+        r"\\.\AmtPtpControlDeviceUm",
+        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+        0x00000001 | 0x00000002,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+        None,
+        3,  # OPEN_EXISTING
+        0,
+        None,
+    )
+    handle_value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+    if handle_value is None or handle_value == ctypes.c_void_p(-1).value:
+        return BatteryResult("unavailable")
+
+    try:
+        output = ctypes.c_uint32(0)
+        returned = wintypes.DWORD(0)
+        ok = device_io_control(
+            handle,
+            AMT_PTP_IOCTL_GET_BATTERY,
+            None,
+            0,
+            ctypes.byref(output),
+            ctypes.sizeof(output),
+            ctypes.byref(returned),
+            None,
+        )
+        if not ok:
+            return BatteryResult("unavailable")
+        if returned.value < ctypes.sizeof(output) or output.value > 100:
+            return BatteryResult("unsupported")
+        return BatteryResult("available", percentage=int(output.value))
+    finally:
+        close_handle(handle)
+
+
 class BatteryPoller:
-    """Slow two-device battery poller with injected HID and timing seams."""
+    """Slow Apple HID/control-device battery poller with injected I/O seams."""
 
     KEYBOARD_PID = 0x0267
     TRACKPAD_PID = 0x0265
+    MOUSE_PID = 0x0269
 
     def __init__(
         self,
@@ -347,6 +786,7 @@ class BatteryPoller:
         normal_interval=300.0,
         failure_backoff=900.0,
         stale_after=600.0,
+        trackpad_driver_battery_query=None,
     ):
         if normal_interval < 180.0:
             raise ValueError("normal battery polling must be multi-minute")
@@ -358,6 +798,7 @@ class BatteryPoller:
         self.normal_interval = float(normal_interval)
         self.failure_backoff = float(failure_backoff)
         self.stale_after = float(stale_after)
+        self.trackpad_driver_battery_query = trackpad_driver_battery_query
         self._last_valid = {}
 
     def _with_stale_state(self, device, result, now):
@@ -378,22 +819,62 @@ class BatteryPoller:
         try:
             devices = list(self.backend.enumerate_devices() or [])
         except Exception:
-            keyboard = trackpad = BatteryResult("unavailable")
+            keyboard = trackpad = mouse = BatteryResult("unavailable")
         else:
             enumerate_cycle = lambda: devices
+            request_feature = getattr(self.backend, "request_feature_report", None)
+            feature_info = getattr(self.backend, "feature_report_info", None)
             keyboard = query_apple_battery(
-                self.KEYBOARD_PID, enumerate_cycle, self.backend.request_report
+                self.KEYBOARD_PID,
+                enumerate_cycle,
+                self.backend.request_report,
+                request_feature,
+                feature_info,
             )
             trackpad = query_apple_battery(
-                self.TRACKPAD_PID, enumerate_cycle, self.backend.request_report
+                self.TRACKPAD_PID,
+                enumerate_cycle,
+                self.backend.request_report,
+                request_feature,
+                feature_info,
+            )
+            target_trackpad_present = any(
+                device.get("product_id") == self.TRACKPAD_PID
+                and (
+                    device.get("vendor_id") in (0x004C, 0x05AC)
+                    or "vid&0001004c" in str(device.get("path", "")).lower()
+                    or "vid&000205ac" in str(device.get("path", "")).lower()
+                    or "vid_05ac" in str(device.get("path", "")).lower()
+                )
+                for device in devices
+            )
+            if (
+                trackpad.status != "available"
+                and target_trackpad_present
+                and self.trackpad_driver_battery_query is not None
+            ):
+                try:
+                    driver_result = self.trackpad_driver_battery_query()
+                except Exception:
+                    driver_result = BatteryResult("unavailable")
+                if driver_result.status == "available":
+                    trackpad = driver_result
+            mouse = query_apple_mouse_battery(
+                enumerate_cycle,
+                self.backend.request_report,
+                getattr(self.backend, "request_feature_report", None),
+                getattr(self.backend, "feature_report_info", None),
             )
         keyboard = self._with_stale_state("keyboard", keyboard, now)
         trackpad = self._with_stale_state("trackpad", trackpad, now)
-        snapshot = BatterySnapshot(keyboard, trackpad, now)
+        mouse = self._with_stale_state("mouse", mouse, now)
+        snapshot = BatterySnapshot(keyboard, trackpad, now, mouse)
         self.publish(snapshot)
         delay = (
             self.normal_interval
-            if "available" in (keyboard.status, trackpad.status)
+            if "available" in (
+                keyboard.status, trackpad.status, mouse.status
+            )
             else self.failure_backoff
         )
         return snapshot, delay

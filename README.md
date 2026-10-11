@@ -1,9 +1,9 @@
 # Pearipherals: Apple Magic Keyboard and Magic Trackpad 2 for Windows
 
-**Pearipherals is a free, open-source Windows tray app for the Apple Magic
-Keyboard and Magic Trackpad 2. It adds Mac-style function keys, three-finger
-trackpad gestures, battery levels, natural scrolling, and display brightness
-controls in one portable EXE.**
+**Pearipherals is a free, open-source Windows tray app for Apple Magic Keyboard,
+Magic Trackpad 2, and Magic Mouse 2015 (PID 0269). It adds Mac-style function
+keys, three-finger trackpad gestures, battery levels, natural scrolling, and
+display brightness controls in one portable EXE.**
 
 ## Try the v1.2.1 unsigned beta
 
@@ -11,10 +11,23 @@ controls in one portable EXE.**
 · [Release notes and SHA-256 checksum](https://github.com/OnlineFix/Pearipherals/releases/tag/v1.2.1-unsigned)
 
 For **Windows 10/11 x64**, Apple Magic Keyboard and Magic Trackpad 2 over
-Bluetooth. Trackpad pointer movement and two-finger scrolling require the
-separately installed [mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad).
-Not every hardware revision or setup has been validated; see the release notes
-for testing limits.
+Bluetooth; the optional Magic Mouse 2015 is PID `0269`. For Trackpad 2, prefer the upstream
+[Microsoft-signed MagicTrackpad2ForWindows v2.0 package](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0),
+which documents Bluetooth and battery support on Windows 11. Follow the upstream
+installation instructions and do not stack it with another precision-touchpad
+driver. The older
+[mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad)
+is an alternative only if the v2.0 package does not work on your setup.
+Magic Mouse battery reads are read-only: the app tries Input report `0x90`.
+If it is unavailable, the app inspects each matching HID collection's feature
+capabilities and queries a Feature report only when the descriptor declares
+Generic Device / Battery Strength (Usage Page `0x0006`, Usage `0x0020`). The
+feature report ID and length are read from the descriptor; `0x47` is one
+observed value, not a hard-coded assumption. This fallback still needs physical
+confirmation on each Apple driver variant. Mouse scrolling requires the
+separately installed Apple Wireless Mouse driver; the tray's **Magic Mouse
+scrolling setup guide** opens the driver folder, but the app does not install,
+replace, or modify any driver.
 
 > **Unsigned beta:** Windows cannot verify the publisher. SmartScreen may warn;
 > Smart App Control may block it without a per-app bypass. Do not disable
@@ -33,7 +46,9 @@ v1.1.
 | **"Tragic" Keyboard** | Mac-style function row for an Apple Magic Keyboard on Windows |
 | **"Tragic" Trackpad** | Three-finger swipes or drag for Magic Trackpad 2 on Windows |
 | **"Moodio" Display** | Brightness keys for Apple Studio Display and other monitors |
-| **Battery monitoring** | Separate keyboard/trackpad battery levels and low-battery alerts |
+| **Battery monitoring** | Keyboard, Trackpad 2, and Magic Mouse 2015 battery levels and low-battery alerts |
+| **Magic Mouse v2 support** | Read-only battery query using Input 0x90, with a Feature 0x47 fallback when that driver exposes it |
+| **Mouse scroll setup** | Opens the Apple Wireless Mouse driver guide; driver installation stays user-controlled |
 | **Portable Windows app** | One EXE, local configuration, no account, no telemetry |
 
 ## "Tragic" Keyboard: Apple function keys on Windows
@@ -87,15 +102,30 @@ normal DDC controls. A video-only USB-C-to-DisplayPort cable cannot carry the
 Studio Display's USB control data, so Pearipherals uses the available fallback in
 that setup.
 
-## Magic Keyboard and Magic Trackpad battery levels
+## Magic Keyboard, Magic Trackpad, and Magic Mouse battery levels
 
-Pearipherals shows the Apple Magic Keyboard and Magic Trackpad battery levels as
-separate entries in the tray menu. Battery polling is slow and isolated, and the
-app reopens devices for each poll instead of keeping Bluetooth HID handles open
-while a device sleeps. Polls run every five minutes while either device returns
-battery data, backing off to fifteen minutes when neither does.
+Pearipherals shows the Apple Magic Keyboard, Magic Trackpad, and Magic Mouse 2015
+battery levels as separate entries in the tray menu. Battery polling is slow and
+isolated, and the app reopens devices for each poll instead of keeping Bluetooth
+HID handles open while a device sleeps. Polls run every five minutes while any
+device returns battery data, backing off to fifteen minutes when none does.
+Magic Mouse v2 prefers Input report 0x90; if that is unavailable, its
+fallback inspects the live HID descriptor for the Generic Device / Battery
+Strength feature and queries only the report ID/length declared there. The
+descriptor-driven fallback is unit-tested but still requires physical
+confirmation on the Apple driver used on a particular Windows installation.
 
-Both devices have **low-battery Windows notifications at 20% or below**, with
+For Magic Trackpad 2, battery polling first tries Input report `0x90`.
+If it is unavailable, the app inspects the HID descriptor for a declared
+Generic Device / Battery Strength Feature report, then tries the upstream
+`AmtPtpControlDeviceUm` `IOCTL_GET_BATTERY` interface documented by the
+[MagicTrackpad2ForWindows control panel source](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/blob/master/AmtPtpControlPanel/Main.cs).
+Only the GET_BATTERY request is issued; settings-reload requests and HID
+output/feature writes are not used. The driver fallback requires a version
+that exposes that control device. Both fallback routes still need physical
+confirmation on the target installation.
+
+Each device with a valid current battery reading has **low-battery Windows notifications at 20% or below**, with
 one **critical escalation at 5% or below**. The first fresh low reading after
 launch warns too. Alerts are tracked separately for each device and combined
 into one notification when both need a warning in the same poll. Repeated polls
@@ -114,16 +144,29 @@ it cannot guarantee a warning before a sleeping or disconnected device dies.
 - Windows 10 or Windows 11
 - Apple Magic Keyboard connected over Bluetooth
 - Apple Magic Trackpad 2 connected over Bluetooth
-- For trackpad pointer movement and two-finger scrolling, install the free,
-  signed [mac-precision-touchpad](https://github.com/imbushuo/mac-precision-touchpad)
-  driver once
+- Optional Apple Magic Mouse 2015 (Bluetooth PID `0269`)
+- For Trackpad 2 pointer movement and two-finger scrolling on Windows 11,
+  prefer the upstream [Microsoft-signed MagicTrackpad2ForWindows v2.0
+  release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0).
+  Follow its instructions and do not install it alongside another precision
+  filter driver. Its older [mac-precision-touchpad
+  alternative](https://github.com/imbushuo/mac-precision-touchpad) should only
+  be used instead, not stacked with it.
+
+Magic Mouse scrolling uses the separate Apple Wireless Mouse driver. The
+application does not bundle or silently install kernel drivers; use the tray's
+scroll setup guide and inspect the driver package before installing it.
 
 The keyboard mappings, battery display, and monitor controls do not require that
 trackpad driver.
 
 ## Download and quick start
 
-1. For Magic Trackpad 2, install the mac-precision-touchpad driver.
+1. For Magic Trackpad 2 on Windows 11, review the upstream
+   [Microsoft-signed v2.0 driver release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0)
+   and follow its installation instructions. Do not stack multiple trackpad
+   drivers; if v2.0 does not work on this hardware, remove it before trying
+   the older mac-precision-touchpad alternative.
 2. Read the [v1.2.1 unsigned beta release notes](https://github.com/OnlineFix/Pearipherals/releases/tag/v1.2.1-unsigned)
    for security warnings, checksums, and update/rollback instructions, then use
    the [beta download above](#try-the-v121-unsigned-beta).
@@ -277,8 +320,12 @@ MIT-licensed companion for the documented Magic Keyboard and Magic Trackpad 2
 Bluetooth setup on Windows 10/11 x64. It provides function-key controls, custom
 three-finger gestures and battery monitoring, but it is **not a driver or a
 feature-for-feature replacement**. Trackpad pointer movement and two-finger
-scrolling require the separate mac-precision-touchpad driver. The current beta
-is unsigned and hardware coverage is still being validated.
+scrolling require a separate driver. For Magic Trackpad 2 on Windows 11, the
+preferred starting point is the upstream
+[Microsoft-signed MagicTrackpad2ForWindows v2.0 release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0);
+follow its instructions and do not stack it with the older
+[mac-precision-touchpad](https://github.com/imbushuo/mac-precision-touchpad)
+driver. The current beta is unsigned and hardware coverage is still being validated.
 
 [Magic Utilities](https://magicutilities.net/) provides its own Windows drivers
 and documents Bluetooth and wired USB support, including Magic Mouse support.
