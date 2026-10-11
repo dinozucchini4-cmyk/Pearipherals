@@ -82,10 +82,12 @@ def app_harness():
     for name in (
         "migrate_legacy_autostart", "set_tf_mode", "worker", "hook_thread",
         "make_icon", "suppress_pointer", "three_finger_drag", "start_battery_worker",
+        "start_mouse_scroll_service", "stop_mouse_scroll_service",
         "on_toggle", "on_mode_swipes", "on_mode_drag", "on_mode_off", "on_natural_scroll",
-        "battery_menu_label", "tp_settings", "on_apply_tp", "on_restore_tp", "on_autostart",
-        "on_about", "on_export_diagnostics", "on_open_docs", "on_report_problem",
-        "on_prepare_removal", "append_error",
+        "on_mouse_scroll_toggle", "on_mouse_natural_scroll_toggle", "on_mouse_smooth_scroll_toggle", "set_mouse_scroll_speed",
+        "mouse_scroll_status_label", "battery_menu_label", "tp_settings", "on_apply_tp",
+        "on_restore_tp", "on_autostart", "on_about", "on_export_diagnostics",
+        "on_open_docs", "on_report_problem", "on_prepare_removal", "append_error",
     ):
         namespace[name] = mock.Mock()
     exec(compile(ast.Module(nodes, type_ignores=[]), str(APP_PATH), "exec"), namespace)

@@ -1927,6 +1927,8 @@ class BatteryTests(unittest.TestCase):
         self.assertIn("worker.join(", source)
         self.assertIn('battery_menu_label("keyboard")', source)
         self.assertIn('battery_menu_label("trackpad")', source)
+        self.assertIn('battery_menu_label("mouse")', source)
+        self.assertIn('start_mouse_scroll_service()', source)
         worker_section = source[source.index("def start_battery_worker"):source.index(
             "def stop_battery_worker"
         )]
@@ -2202,7 +2204,8 @@ class Phase3InputBlockerTests(unittest.TestCase):
                 callback = InputLifecycleTests._load_app_definition("on_quit", dict(
                     actions=mock.Mock(), battery_menu_refresh=dispatcher,
                     shutdown_custom_input=shutdown_custom_input, three_finger_drag=g,
-                    suppress_pointer=suppression, stop_battery_worker=stop_worker,
+                    suppress_pointer=suppression, stop_mouse_scroll_service=mock.Mock(return_value=True),
+                    stop_battery_worker=stop_worker,
                     brightness=mock.Mock(last_backend="hardware"),
                     os=mock.Mock(_exit=exits.append), _notify=notify))
                 callback(icon, None)

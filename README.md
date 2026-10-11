@@ -36,6 +36,18 @@ v1.1.
 | **Battery monitoring** | Separate keyboard/trackpad battery levels and low-battery alerts |
 | **Portable Windows app** | One EXE, local configuration, no account, no telemetry |
 
+## Development branch: Own Magic Utilities integration
+
+The `own-magic-integration-plan` branch is an **experimental integration workspace**, not a released or hardware-validated build. It adds an independent, user-mode scroll reader for the Apple Magic Mouse 2015 (Bluetooth PID `0269`) and extends the separate HID battery poller to query that PID as well. The existing Trackpad and Keyboard features remain in place.
+
+- The reader uses report ID `0x12` touch records and sends normal Windows wheel input; it does not write HID output/feature reports.
+- It does not install a driver, edit the registry, alter device bindings, or use the 2024-only PID `0323` patch.
+- The tray menu provides enable/disable, natural direction, smooth/classic wheel mode, and speed controls.
+- Battery health/design capacity are not inferred. An unavailable reading remains unavailable, not `0%`.
+- This branch is not yet verified on a physical Magic Mouse 2015. The build and automated tests must pass first, followed by physical testing of scroll and battery simultaneously.
+
+The engineering record and acceptance checklist are in [OWN_MAGIC_UTILITIES_INTEGRATION.md](OWN_MAGIC_UTILITIES_INTEGRATION.md). Use the released beta link above for the published build; it does not include this experimental Mouse integration.
+
 ## "Tragic" Keyboard: Apple function keys on Windows
 
 | Key | Action |
