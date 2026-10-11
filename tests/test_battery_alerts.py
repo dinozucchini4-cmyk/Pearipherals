@@ -14,12 +14,15 @@ import pearipherals_core as core
 APP_PATH = Path(__file__).resolve().parents[1] / "pearipherals.py"
 
 
-def snapshot(keyboard=80, trackpad=80, captured_at=100.0):
+def snapshot(keyboard=80, trackpad=80, captured_at=100.0, mouse=None):
     def reading(value):
         return value if isinstance(value, core.BatteryResult) else core.BatteryResult(
             "available", value
         )
-    return core.BatterySnapshot(reading(keyboard), reading(trackpad), captured_at)
+    mouse_reading = reading(mouse) if mouse is not None else None
+    return core.BatterySnapshot(
+        reading(keyboard), reading(trackpad), captured_at, mouse_reading
+    )
 
 
 def evaluate_and_ack(policy, reading, now):
@@ -96,6 +99,25 @@ def app_harness():
 
 
 class BatteryAlertPolicyTests(unittest.TestCase):
+    def test_magic_mouse_low_and_critical_alerts_use_fresh_readings(self):
+        policy = core.BatteryAlertPolicy()
+        self.assertEqual(
+            ("Magic Mouse: 20%",),
+            evaluate_and_ack(policy, snapshot(mouse=20), 100.0),
+        )
+        self.assertEqual(
+            ("Magic Mouse: 5% (critical)",),
+            evaluate_and_ack(policy, snapshot(mouse=5), 100.0),
+        )
+        self.assertEqual(
+            (),
+            evaluate_and_ack(policy, snapshot(mouse=5, captured_at=50.0), 100.0),
+        )
+        self.assertEqual(
+            (),
+            evaluate_and_ack(policy, snapshot(mouse=core.BatteryResult("unavailable")), 100.0),
+        )
+
     def test_low_then_critical_are_each_attempted_once_per_device(self):
         policy = core.BatteryAlertPolicy()
         self.assertEqual((), evaluate_and_ack(policy, snapshot(21, 21), 100.0))
