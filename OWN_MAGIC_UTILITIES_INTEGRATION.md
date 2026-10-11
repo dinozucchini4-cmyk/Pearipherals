@@ -70,6 +70,21 @@ Record exact Windows build, connection type, driver provider/version/INF, and re
 
 A release is not called complete until all three devices pass, battery readings stay independent of scrolling/input ownership, and rollback is verified. Until then, label it an integration/preview build and keep the currently working driver state recoverable.
 
+## Current integration branch implementation
+
+The branch now includes an experimental `magic_mouse_scroll.py` module and wiring in `pearipherals.py` / `pearipherals_core.py`:
+
+- Reads the Magic Mouse 2015 HID touch collection in user mode using input-report reads only.
+- Decodes report ID `0x12`, using 8-byte contact records after the 14-byte header for extended touch reports. The public protocol reference is the Linux kernel's `drivers/hid/hid-magicmouse.c`; this branch is an independent implementation and does not vendor that source.
+- Requires exactly one firm contact (size at least 8) for the first scroll implementation; ambiguous multi-touch frames reset the scroll baseline rather than being guessed.
+- Injects standard Windows vertical/horizontal wheel input, with smooth (12-unit deltas) and classic (120-unit detents) modes, natural-direction setting, and speed setting.
+- Extends the existing HID battery poller to PID `0269` and protects report reads with a shared lock. A readable `0x90` response is still required for a real battery percentage.
+- Includes pure unit tests for report decoding, signed coordinates, collection selection, natural direction, smooth/classic wheel deltas, weak contacts, and ambiguous multi-touch frames.
+
+**Verification status:** source committed; no Windows-hosted CI result or physical-device result is claimed yet. The raw report layout is grounded in the public protocol reference, but this Windows implementation still needs automated test/build validation and physical confirmation that the expected collection can be opened and emits the reports. Keep it marked experimental until the acceptance gates pass.
+
+Protocol reference: https://github.com/torvalds/linux/blob/master/drivers/hid/hid-magicmouse.c
+
 ## Immediate implementation sequence
 
 1. Preserve the current default driver configuration and capture the exact current PnP state.
