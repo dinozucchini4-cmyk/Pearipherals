@@ -11,9 +11,13 @@ display brightness controls in one portable EXE.**
 · [Release notes and SHA-256 checksum](https://github.com/OnlineFix/Pearipherals/releases/tag/v1.2.1-unsigned)
 
 For **Windows 10/11 x64**, Apple Magic Keyboard and Magic Trackpad 2 over
-Bluetooth; the optional Magic Mouse 2015 is PID `0269`. Trackpad pointer
-movement and two-finger scrolling require the separately installed
-[mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad).
+Bluetooth; the optional Magic Mouse 2015 is PID `0269`. For Trackpad 2, prefer the upstream
+[Microsoft-signed MagicTrackpad2ForWindows v2.0 package](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0),
+which documents Bluetooth and battery support on Windows 11. Follow the upstream
+installation instructions and do not stack it with another precision-touchpad
+driver. The older
+[mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad)
+is an alternative only if the v2.0 package does not work on your setup.
 Magic Mouse battery reads are read-only: the app tries Input report `0x90`, then
 tries Feature report `0x47` only when the first path is unavailable and accepts
 only a matching report ID and a plausible 1–100 percentage. The feature-report
@@ -127,9 +131,13 @@ it cannot guarantee a warning before a sleeping or disconnected device dies.
 - Apple Magic Keyboard connected over Bluetooth
 - Apple Magic Trackpad 2 connected over Bluetooth
 - Optional Apple Magic Mouse 2015 (Bluetooth PID `0269`)
-- For trackpad pointer movement and two-finger scrolling, install the free,
-  signed [mac-precision-touchpad](https://github.com/imbushuo/mac-precision-touchpad)
-  driver once
+- For Trackpad 2 pointer movement and two-finger scrolling on Windows 11,
+  prefer the upstream [Microsoft-signed MagicTrackpad2ForWindows v2.0
+  release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0).
+  Follow its instructions and do not install it alongside another precision
+  filter driver. Its older [mac-precision-touchpad
+  alternative](https://github.com/imbushuo/mac-precision-touchpad) should only
+  be used instead, not stacked with it.
 
 Magic Mouse scrolling uses the separate Apple Wireless Mouse driver. The
 application does not bundle or silently install kernel drivers; use the tray's
@@ -140,7 +148,11 @@ trackpad driver.
 
 ## Download and quick start
 
-1. For Magic Trackpad 2, install the mac-precision-touchpad driver.
+1. For Magic Trackpad 2 on Windows 11, review the upstream
+   [Microsoft-signed v2.0 driver release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0)
+   and follow its installation instructions. Do not stack multiple trackpad
+   drivers; if v2.0 does not work on this hardware, remove it before trying
+   the older mac-precision-touchpad alternative.
 2. Read the [v1.2.1 unsigned beta release notes](https://github.com/OnlineFix/Pearipherals/releases/tag/v1.2.1-unsigned)
    for security warnings, checksums, and update/rollback instructions, then use
    the [beta download above](#try-the-v121-unsigned-beta).
@@ -294,8 +306,12 @@ MIT-licensed companion for the documented Magic Keyboard and Magic Trackpad 2
 Bluetooth setup on Windows 10/11 x64. It provides function-key controls, custom
 three-finger gestures and battery monitoring, but it is **not a driver or a
 feature-for-feature replacement**. Trackpad pointer movement and two-finger
-scrolling require the separate mac-precision-touchpad driver. The current beta
-is unsigned and hardware coverage is still being validated.
+scrolling require a separate driver. For Magic Trackpad 2 on Windows 11, the
+preferred starting point is the upstream
+[Microsoft-signed MagicTrackpad2ForWindows v2.0 release](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/releases/tag/v2.0);
+follow its instructions and do not stack it with the older
+[mac-precision-touchpad](https://github.com/imbushuo/mac-precision-touchpad)
+driver. The current beta is unsigned and hardware coverage is still being validated.
 
 [Magic Utilities](https://magicutilities.net/) provides its own Windows drivers
 and documents Bluetooth and wired USB support, including Magic Mouse support.
