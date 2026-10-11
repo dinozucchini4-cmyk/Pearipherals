@@ -8,6 +8,8 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 
+from magic_mouse_scroll import HID_ACCESS_LOCK
+
 
 _SAVE_LOCK = threading.Lock()
 CONFIG_LOCK = threading.RLock()
@@ -186,6 +188,7 @@ class BatterySnapshot:
     keyboard: BatteryResult
     trackpad: BatteryResult
     captured_at: float
+    mouse: BatteryResult | None = None
 
 
 class BatterySnapshotStore:
@@ -193,7 +196,7 @@ class BatterySnapshotStore:
 
     def __init__(self):
         loading = BatteryResult("loading")
-        self._snapshot = BatterySnapshot(loading, loading, 0.0)
+        self._snapshot = BatterySnapshot(loading, loading, 0.0, loading)
         self._lock = threading.Lock()
 
     def publish(self, snapshot):
@@ -223,8 +226,11 @@ class BatteryAlertPolicy:
                 or not 0 <= now - snapshot.captured_at <= 600.0):
             return ()
         alerts = []
-        for device, result in (("Magic Keyboard", snapshot.keyboard),
-                               ("Magic Trackpad", snapshot.trackpad)):
+        readings = [("Magic Keyboard", snapshot.keyboard),
+                    ("Magic Trackpad", snapshot.trackpad)]
+        if snapshot.mouse is not None:
+            readings.append(("Magic Mouse", snapshot.mouse))
+        for device, result in readings:
             if (result.status != "available" or result.stale
                     or type(result.percentage) is not int
                     or not 0 <= result.percentage <= 100):
@@ -255,12 +261,15 @@ class HidBatteryBackend:
         return self._hid.enumerate()
 
     def request_report(self, path):
-        handle = self._hid.device()
-        try:
-            handle.open_path(path)
-            return bytes(handle.get_input_report(0x90, 3))
-        finally:
-            handle.close()
+        # Share the HID handle window with the live Magic Mouse reader. The
+        # reader's input waits are bounded, so a battery query cannot deadlock.
+        with HID_ACCESS_LOCK:
+            handle = self._hid.device()
+            try:
+                handle.open_path(path)
+                return bytes(handle.get_input_report(0x90, 3))
+            finally:
+                handle.close()
 
 
 def parse_apple_battery_report(report):
@@ -334,10 +343,11 @@ def format_battery_label(device_name, result):
 
 
 class BatteryPoller:
-    """Slow two-device battery poller with injected HID and timing seams."""
+    """Slow three-device battery poller with injected HID and timing seams."""
 
     KEYBOARD_PID = 0x0267
     TRACKPAD_PID = 0x0265
+    MOUSE_PID = 0x0269
 
     def __init__(
         self,
@@ -378,7 +388,7 @@ class BatteryPoller:
         try:
             devices = list(self.backend.enumerate_devices() or [])
         except Exception:
-            keyboard = trackpad = BatteryResult("unavailable")
+            keyboard = trackpad = mouse = BatteryResult("unavailable")
         else:
             enumerate_cycle = lambda: devices
             keyboard = query_apple_battery(
@@ -387,13 +397,17 @@ class BatteryPoller:
             trackpad = query_apple_battery(
                 self.TRACKPAD_PID, enumerate_cycle, self.backend.request_report
             )
+            mouse = query_apple_battery(
+                self.MOUSE_PID, enumerate_cycle, self.backend.request_report
+            )
         keyboard = self._with_stale_state("keyboard", keyboard, now)
         trackpad = self._with_stale_state("trackpad", trackpad, now)
-        snapshot = BatterySnapshot(keyboard, trackpad, now)
+        mouse = self._with_stale_state("mouse", mouse, now)
+        snapshot = BatterySnapshot(keyboard, trackpad, now, mouse)
         self.publish(snapshot)
         delay = (
             self.normal_interval
-            if "available" in (keyboard.status, trackpad.status)
+            if "available" in (keyboard.status, trackpad.status, mouse.status)
             else self.failure_backoff
         )
         return snapshot, delay
