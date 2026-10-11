@@ -18,13 +18,16 @@ installation instructions and do not stack it with another precision-touchpad
 driver. The older
 [mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad)
 is an alternative only if the v2.0 package does not work on your setup.
-Magic Mouse battery reads are read-only: the app tries Input report `0x90`, then
-tries Feature report `0x47` only when the first path is unavailable and accepts
-only a matching report ID and a plausible 1–100 percentage. The feature-report
-fallback still needs physical confirmation on each Apple driver variant. Mouse
-scrolling requires the separately installed Apple Wireless Mouse driver; the
-tray's **Magic Mouse scrolling setup guide** opens the driver folder, but the
-app does not install, replace, or modify any driver.
+Magic Mouse battery reads are read-only: the app tries Input report `0x90`.
+If it is unavailable, the app inspects each matching HID collection's feature
+capabilities and queries a Feature report only when the descriptor declares
+Generic Device / Battery Strength (Usage Page `0x0006`, Usage `0x0020`). The
+feature report ID and length are read from the descriptor; `0x47` is one
+observed value, not a hard-coded assumption. This fallback still needs physical
+confirmation on each Apple driver variant. Mouse scrolling requires the
+separately installed Apple Wireless Mouse driver; the tray's **Magic Mouse
+scrolling setup guide** opens the driver folder, but the app does not install,
+replace, or modify any driver.
 
 > **Unsigned beta:** Windows cannot verify the publisher. SmartScreen may warn;
 > Smart App Control may block it without a per-app bypass. Do not disable
@@ -106,10 +109,21 @@ battery levels as separate entries in the tray menu. Battery polling is slow and
 isolated, and the app reopens devices for each poll instead of keeping Bluetooth
 HID handles open while a device sleeps. Polls run every five minutes while any
 device returns battery data, backing off to fifteen minutes when none does.
-Magic Mouse v2 prefers Input report 0x90 and tries a read-only Feature 0x47
-fallback when the active HID collection does not expose the input report. That
-fallback is validated by unit tests but still requires physical confirmation on
-the Apple driver used on a particular Windows installation.
+Magic Mouse v2 prefers Input report 0x90; if that is unavailable, its
+fallback inspects the live HID descriptor for the Generic Device / Battery
+Strength feature and queries only the report ID/length declared there. The
+descriptor-driven fallback is unit-tested but still requires physical
+confirmation on the Apple driver used on a particular Windows installation.
+
+For Magic Trackpad 2, battery polling first tries the ordinary HID battery
+collection. When the matching PID 0265 device is present but that HID path is
+unavailable, the app also tries the upstream
+`AmtPtpControlDeviceUm` `IOCTL_GET_BATTERY` interface documented by the
+[MagicTrackpad2ForWindows control panel source](https://github.com/vitoplantamura/MagicTrackpad2ForWindows/blob/master/AmtPtpControlPanel/Main.cs).
+Only the GET_BATTERY request is issued; settings-reload requests and HID
+output/feature writes are not used. This fallback requires a driver version
+that exposes that control device, and still needs physical confirmation on the
+target installation.
 
 Each device with a valid current battery reading has **low-battery Windows notifications at 20% or below**, with
 one **critical escalation at 5% or below**. The first fresh low reading after
