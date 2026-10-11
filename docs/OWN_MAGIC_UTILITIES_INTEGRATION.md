@@ -31,10 +31,11 @@ Mouse scrolling still depends on the separately installed Apple Wireless Mouse d
 
 ### Magic Trackpad 2 — PID 0265
 
-1. Poll the ordinary Apple HID battery collection first.
-2. If a matching Trackpad 2 is enumerated but the ordinary HID battery read is unavailable, query the upstream driver's documented `\\.\AmtPtpControlDeviceUm` `IOCTL_GET_BATTERY` interface.
-3. The fallback uses the control code defined in the upstream control-panel source (`CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)`, numeric value `0x222004`) and accepts only a successful 0–100 response.
-4. Only the GET-battery IOCTL is called. The app does not call the driver's settings-reload IOCTL and does not write HID output/feature reports.
+1. Poll Input report `0x90` on the ordinary Apple HID battery collection when it is exposed.
+2. If unavailable, inspect the HID feature capabilities and query a feature report only if Generic Device / Battery Strength (Usage Page `0x0006`, Usage `0x0020`) is declared. The feature report ID and length are taken from that descriptor.
+3. If a matching Trackpad 2 is enumerated but no HID battery read succeeds, query the upstream driver's documented `\\.\AmtPtpControlDeviceUm` `IOCTL_GET_BATTERY` interface.
+4. The driver fallback uses the control code defined in the upstream control-panel source (`CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)`, numeric value `0x222004`) and accepts only a successful 0–100 response.
+5. Only the GET-battery IOCTL is called. The app does not call the driver's settings-reload IOCTL and does not write HID output/feature reports.
 
 This path is useful only when a driver providing that control device is installed. If neither HID nor driver-level reading is available, the app reports unavailable rather than inventing a percentage.
 
