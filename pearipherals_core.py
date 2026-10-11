@@ -445,22 +445,42 @@ def parse_apple_battery_report(report):
     )
 
 
-def query_apple_battery(product_id, enumerate_devices, request_report):
-    """Query one exact Apple vendor HID collection through injected I/O."""
-    candidates = [
+def query_apple_battery(
+    product_id,
+    enumerate_devices,
+    request_report,
+    request_feature_report=None,
+    feature_report_info=None,
+):
+    """Read an Apple keyboard/trackpad battery using only descriptor-backed reports.
+
+    Prefer Input 0x90 from the Apple vendor battery collection. If that input
+    collection is not exposed by the active function driver, a Feature report
+    is queried only when the same HID collection's descriptor declares Generic
+    Device / Battery Strength (Usage Page 0x0006, Usage 0x0020).
+    """
+    targets = [
         device
         for device in (enumerate_devices() or [])
-        if device.get("vendor_id") == 0x004C
+        if device.get("vendor_id") in (0x004C, 0x05AC)
         and device.get("product_id") == product_id
-        and device.get("usage_page") == 0xFF00
-        and device.get("usage") == 0x14
+        and device.get("path") is not None
     ]
-    if not candidates:
+    if not targets:
+        return BatteryResult("not_detected")
+
+    input_candidates = [
+        device for device in targets
+        if device.get("usage_page") == 0xFF00 and device.get("usage") == 0x14
+    ]
+    if not input_candidates and (
+        request_feature_report is None or feature_report_info is None
+    ):
         return BatteryResult("not_detected")
 
     had_query_failure = False
     had_malformed_report = False
-    for device in candidates:
+    for device in input_candidates:
         try:
             report = request_report(device["path"])
         except Exception:
@@ -471,9 +491,56 @@ def query_apple_battery(product_id, enumerate_devices, request_report):
         except (TypeError, ValueError):
             had_malformed_report = True
 
-    if had_malformed_report and not had_query_failure:
+    if request_feature_report is not None and feature_report_info is not None:
+        # Prefer a normal mouse/pointer collection, then inspect other HID
+        # collections for this exact Apple VID/PID. No fixed report ID.
+        feature_candidates = sorted(
+            targets,
+            key=lambda d: 0 if (
+                d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002
+            ) else 1,
+        )
+        seen_paths = set()
+        for device in feature_candidates:
+            path = device["path"]
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                info = feature_report_info(path)
+            except Exception:
+                had_query_failure = True
+                continue
+            if (
+                not isinstance(info, (tuple, list))
+                or len(info) != 2
+                or type(info[0]) is not int
+                or type(info[1]) is not int
+                or info[0] < 0
+                or info[1] < 2
+            ):
+                continue
+
+            report_id, report_length = info
+            try:
+                feature_report = request_feature_report(
+                    path, report_id, report_length
+                )
+            except Exception:
+                had_query_failure = True
+                continue
+            try:
+                return parse_apple_battery_feature_report(
+                    feature_report, report_id
+                )
+            except (TypeError, ValueError):
+                had_malformed_report = True
+
+    if had_query_failure:
+        return BatteryResult("unavailable")
+    if had_malformed_report or targets:
         return BatteryResult("unsupported")
-    return BatteryResult("unavailable")
+    return BatteryResult("not_detected")
 
 
 def parse_apple_mouse_input_report(report):
@@ -491,15 +558,20 @@ def parse_apple_mouse_input_report(report):
     )
 
 
-def parse_apple_mouse_feature_report(report, expected_report_id):
-    """Parse a descriptor-selected Generic Device Battery Strength Feature."""
+def parse_apple_battery_feature_report(report, expected_report_id):
+    """Parse descriptor-selected Generic Device Battery Strength Feature data."""
     raw = bytes(report)
     if len(raw) < 2 or raw[0] != expected_report_id:
-        raise ValueError("unexpected Magic Mouse feature report ID")
+        raise ValueError("unexpected battery feature report ID")
     if not 1 <= raw[1] <= 100:
-        raise ValueError("Magic Mouse feature battery percentage is outside 1..100")
+        raise ValueError("battery feature percentage is outside 1..100")
     # Feature report exposes percentage only; do not infer charge state.
     return BatteryResult("available", percentage=raw[1])
+
+
+def parse_apple_mouse_feature_report(report, expected_report_id):
+    """Compatibility wrapper for Magic Mouse-specific tests/callers."""
+    return parse_apple_battery_feature_report(report, expected_report_id)
 
 
 def query_apple_mouse_battery(
@@ -750,11 +822,21 @@ class BatteryPoller:
             keyboard = trackpad = mouse = BatteryResult("unavailable")
         else:
             enumerate_cycle = lambda: devices
+            request_feature = getattr(self.backend, "request_feature_report", None)
+            feature_info = getattr(self.backend, "feature_report_info", None)
             keyboard = query_apple_battery(
-                self.KEYBOARD_PID, enumerate_cycle, self.backend.request_report
+                self.KEYBOARD_PID,
+                enumerate_cycle,
+                self.backend.request_report,
+                request_feature,
+                feature_info,
             )
             trackpad = query_apple_battery(
-                self.TRACKPAD_PID, enumerate_cycle, self.backend.request_report
+                self.TRACKPAD_PID,
+                enumerate_cycle,
+                self.backend.request_report,
+                request_feature,
+                feature_info,
             )
             target_trackpad_present = any(
                 device.get("product_id") == self.TRACKPAD_PID
