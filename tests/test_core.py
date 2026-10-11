@@ -1527,13 +1527,15 @@ class BatteryTests(unittest.TestCase):
         return InputLifecycleTests._load_app_definition(name, globals_)
 
     class FakeHidBackend:
-        def __init__(self, devices, reports, features=None):
+        def __init__(self, devices, reports, features=None, feature_info=None):
             self.devices = devices
             self.reports = reports
             self.features = features or {}
+            self.feature_info = feature_info or {}
             self.enumerations = 0
             self.queries = []
             self.feature_queries = []
+            self.capability_queries = []
 
         def enumerate_devices(self):
             self.enumerations += 1
@@ -1546,7 +1548,11 @@ class BatteryTests(unittest.TestCase):
                 raise value
             return value
 
-        def request_feature_report(self, path, report_id, length=2):
+        def feature_report_info(self, path):
+            self.capability_queries.append(path)
+            return self.feature_info.get(path)
+
+        def request_feature_report(self, path, report_id, length):
             self.feature_queries.append((path, report_id, length))
             value = self.features[path]
             if isinstance(value, Exception):
@@ -1590,12 +1596,12 @@ class BatteryTests(unittest.TestCase):
             parse_apple_mouse_input_report(b"\x47\x40")
         self.assertEqual(
             BatteryResult("available", 53),
-            parse_apple_mouse_feature_report(b"\x47\x35"),
+            parse_apple_mouse_feature_report(b"\x47\x35", 0x47),
         )
         with self.assertRaises(ValueError):
-            parse_apple_mouse_feature_report(b"\x90\x00\x35")
+            parse_apple_mouse_feature_report(b"\x90\x00\x35", 0x47)
         with self.assertRaises(ValueError):
-            parse_apple_mouse_feature_report(b"\x47\x00")
+            parse_apple_mouse_feature_report(b"\x47\x00", 0x47)
 
     def test_mouse_v2_prefers_input_0x90_when_available(self):
         devices = [
@@ -1611,7 +1617,7 @@ class BatteryTests(unittest.TestCase):
         )
         result = query_apple_mouse_battery(
             backend.enumerate_devices, backend.request_report,
-            backend.request_feature_report,
+            backend.request_feature_report, backend.feature_report_info,
         )
         self.assertEqual(BatteryResult("available", 70, True, False), result)
         self.assertEqual([b"mouse-battery"], backend.queries)
@@ -1628,10 +1634,11 @@ class BatteryTests(unittest.TestCase):
             devices,
             {b"mouse-battery": OSError("Input 0x90 not exposed")},
             {b"mouse-pointer": b"\x47\x3a"},
+            {b"mouse-pointer": (0x47, 2)},
         )
         result = query_apple_mouse_battery(
             backend.enumerate_devices, backend.request_report,
-            backend.request_feature_report,
+            backend.request_feature_report, backend.feature_report_info,
         )
         self.assertEqual(BatteryResult("available", 58), result)
         self.assertEqual(
@@ -1649,10 +1656,11 @@ class BatteryTests(unittest.TestCase):
             devices,
             {b"mouse-battery": OSError("Input 0x90 unavailable")},
             {b"mouse-pointer": b"\x90\x00\x55"},
+            {b"mouse-pointer": (0x47, 2)},
         )
         result = query_apple_mouse_battery(
             backend.enumerate_devices, backend.request_report,
-            backend.request_feature_report,
+            backend.request_feature_report, backend.feature_report_info,
         )
         self.assertNotEqual("available", result.status)
 
@@ -1664,7 +1672,7 @@ class BatteryTests(unittest.TestCase):
         backend = self.FakeHidBackend(devices, {b"mouse-v3": b"\x90\x00\x40"})
         result = query_apple_mouse_battery(
             backend.enumerate_devices, backend.request_report,
-            backend.request_feature_report,
+            backend.request_feature_report, backend.feature_report_info,
         )
         self.assertEqual("not_detected", result.status)
         self.assertEqual([], backend.queries)
