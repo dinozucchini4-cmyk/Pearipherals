@@ -68,6 +68,7 @@ from pearipherals_core import (
     shutdown_custom_input,
 )
 from pearipherals_snipping import open_snipping_overlay
+from magic_mouse_scroll import MagicMouseScrollService
 from pearipherals_support import (
     DIAGNOSTICS_FILENAME,
     SUPPORT_ENUMS,
@@ -154,6 +155,9 @@ DEFAULTS = {"mac_fkeys": True, "brightness_step": 10,
             "drag_gain": 0.75, "drag_grace_ms": 350, "drag_start_units": 30,
             "swipe_units": 300,
             "natural_scroll": False,   # False = swipe down scrolls down (wheel style)
+            "mouse_scroll_enabled": True,
+            "mouse_natural_scroll": False,
+            "mouse_scroll_speed": 32,  # 0..63; HID coordinate scale, default 32
             "tp_settings_applied": False,
             "current_version": None,
             "previous_version": None,
@@ -2158,6 +2162,79 @@ battery_shutdown = False
 battery_thread = None
 battery_poller = None
 battery_menu_refresh = None
+mouse_scroll_service = None
+
+
+def start_mouse_scroll_service():
+    """Start the user-mode PID 0269 reader without changing device drivers."""
+    global mouse_scroll_service
+    if mouse_scroll_service is not None:
+        return
+    try:
+        mouse_scroll_service = MagicMouseScrollService(
+            enabled=lambda: bool(config_value("mouse_scroll_enabled", True)),
+            natural=lambda: bool(config_value("mouse_natural_scroll", False)),
+            speed=lambda: config_value("mouse_scroll_speed", 32),
+            log=append_error,
+        )
+        mouse_scroll_service.start()
+    except Exception as exc:
+        mouse_scroll_service = None
+        append_error(f"Magic Mouse scroll startup failed: {exc}")
+
+
+def stop_mouse_scroll_service():
+    """Stop mouse report reads before the app closes."""
+    global mouse_scroll_service
+    service = mouse_scroll_service
+    if service is None:
+        return True
+    try:
+        stopped = service.stop()
+    except Exception as exc:
+        append_error(f"Magic Mouse scroll shutdown failed: {exc}")
+        stopped = False
+    if stopped:
+        mouse_scroll_service = None
+    return stopped
+
+
+def set_mouse_scroll_speed(icon, speed):
+    if type(speed) is not int or not 0 <= speed <= 63:
+        raise ValueError("Magic Mouse scroll speed must be an integer from 0 to 63")
+    with CONFIG_LOCK:
+        config["mouse_scroll_speed"] = speed
+        save_config(config)
+    _notify(icon, f"Magic Mouse scroll speed set to {speed}.",
+            "Magic Mouse scrolling")
+    _update_menu(icon)
+
+
+def on_mouse_scroll_toggle(icon, item):
+    with CONFIG_LOCK:
+        config["mouse_scroll_enabled"] = not bool(
+            config_value("mouse_scroll_enabled", True)
+        )
+        save_config(config)
+    _notify(icon,
+            "Magic Mouse touch scrolling is " +
+            ("enabled." if config_value("mouse_scroll_enabled", True) else "disabled."),
+            "Magic Mouse scrolling")
+    _update_menu(icon)
+
+
+def on_mouse_natural_scroll_toggle(icon, item):
+    with CONFIG_LOCK:
+        config["mouse_natural_scroll"] = not bool(
+            config_value("mouse_natural_scroll", False)
+        )
+        save_config(config)
+    _update_menu(icon)
+
+
+def mouse_scroll_status_label():
+    state = mouse_scroll_service.state if mouse_scroll_service is not None else "not started"
+    return f"Status: {state}"
 
 
 def publish_battery_snapshot(snapshot):
@@ -2186,6 +2263,9 @@ def battery_menu_label(device):
         return format_battery_label("Magic Keyboard", snapshot.keyboard)
     if device == "trackpad":
         return format_battery_label("Magic Trackpad", snapshot.trackpad)
+    if device == "mouse":
+        result = snapshot.mouse or BatteryResult("loading")
+        return format_battery_label("Magic Mouse", result)
     raise ValueError(f"unknown battery device: {device}")
 
 
@@ -2214,7 +2294,7 @@ def start_battery_worker():
             battery_poller = None
             unavailable = BatteryResult("unavailable")
             publish_battery_snapshot(
-                BatterySnapshot(unavailable, unavailable, time.monotonic())
+                BatterySnapshot(unavailable, unavailable, time.monotonic(), unavailable)
             )
             append_error(f"Battery worker startup failed: {exc}")
 
@@ -2823,6 +2903,7 @@ def on_quit(icon, item):
         suppress_pointer.shutdown,
         retry_release=three_finger_drag.release_pending_button,
     )
+    stop_mouse_scroll_service()
     stop_battery_worker()
     if shutdown_errors:
         detail = "; ".join(str(error) for error in shutdown_errors)
@@ -2871,6 +2952,7 @@ def main():
     threading.Thread(target=hook_thread, daemon=True).start()
     suppress_pointer.start()
     three_finger_drag.start()
+    start_mouse_scroll_service()
     tray_icon = pystray.Icon(
         "Pearipherals", make_icon(),
         "Pearipherals — Tragic Keyboard + Tragic Trackpad",
@@ -2891,12 +2973,32 @@ def main():
             )),
             pystray.MenuItem("Natural scrolling", on_natural_scroll,
                              checked=lambda i: tp_settings.natural_scroll_get()),
+            pystray.MenuItem("Magic Mouse 2015 — Scroll", pystray.Menu(
+                pystray.MenuItem(
+                    "Enable touch scrolling", on_mouse_scroll_toggle,
+                    checked=lambda i: bool(config_value("mouse_scroll_enabled", True))),
+                pystray.MenuItem(
+                    "Natural scrolling", on_mouse_natural_scroll_toggle,
+                    checked=lambda i: bool(config_value("mouse_natural_scroll", False))),
+                pystray.MenuItem("Scroll speed", pystray.Menu(
+                    pystray.MenuItem("Slow", lambda icon, item: set_mouse_scroll_speed(icon, 16),
+                                     radio=True, checked=lambda i: config_value("mouse_scroll_speed", 32) == 16),
+                    pystray.MenuItem("Normal", lambda icon, item: set_mouse_scroll_speed(icon, 32),
+                                     radio=True, checked=lambda i: config_value("mouse_scroll_speed", 32) == 32),
+                    pystray.MenuItem("Fast", lambda icon, item: set_mouse_scroll_speed(icon, 48),
+                                     radio=True, checked=lambda i: config_value("mouse_scroll_speed", 32) == 48),
+                )),
+                pystray.MenuItem(mouse_scroll_status_label, None, enabled=False),
+            )),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda item: battery_menu_label("keyboard"),
                 None, enabled=False),
             pystray.MenuItem(
                 lambda item: battery_menu_label("trackpad"),
+                None, enabled=False),
+            pystray.MenuItem(
+                lambda item: battery_menu_label("mouse"),
                 None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Touchpad settings", pystray.Menu(
