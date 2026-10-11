@@ -1,9 +1,9 @@
 # Pearipherals: Apple Magic Keyboard and Magic Trackpad 2 for Windows
 
-**Pearipherals is a free, open-source Windows tray app for the Apple Magic
-Keyboard and Magic Trackpad 2. It adds Mac-style function keys, three-finger
-trackpad gestures, battery levels, natural scrolling, and display brightness
-controls in one portable EXE.**
+**Pearipherals is a free, open-source Windows tray app for Apple Magic Keyboard,
+Magic Trackpad 2, and Magic Mouse 2015 (PID 0269). It adds Mac-style function
+keys, three-finger trackpad gestures, battery levels, natural scrolling, and
+display brightness controls in one portable EXE.**
 
 ## Try the v1.2.1 unsigned beta
 
@@ -11,10 +11,16 @@ controls in one portable EXE.**
 · [Release notes and SHA-256 checksum](https://github.com/OnlineFix/Pearipherals/releases/tag/v1.2.1-unsigned)
 
 For **Windows 10/11 x64**, Apple Magic Keyboard and Magic Trackpad 2 over
-Bluetooth. Trackpad pointer movement and two-finger scrolling require the
-separately installed [mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad).
-Not every hardware revision or setup has been validated; see the release notes
-for testing limits.
+Bluetooth; the optional Magic Mouse 2015 is PID `0269`. Trackpad pointer
+movement and two-finger scrolling require the separately installed
+[mac-precision-touchpad driver](https://github.com/imbushuo/mac-precision-touchpad).
+Magic Mouse battery reads are read-only: the app tries Input report `0x90`, then
+tries Feature report `0x47` only when the first path is unavailable and accepts
+only a matching report ID and a plausible 1–100 percentage. The feature-report
+fallback still needs physical confirmation on each Apple driver variant. Mouse
+scrolling requires the separately installed Apple Wireless Mouse driver; the
+tray's **Magic Mouse scrolling setup guide** opens the driver folder, but the
+app does not install, replace, or modify any driver.
 
 > **Unsigned beta:** Windows cannot verify the publisher. SmartScreen may warn;
 > Smart App Control may block it without a per-app bypass. Do not disable
@@ -33,7 +39,9 @@ v1.1.
 | **"Tragic" Keyboard** | Mac-style function row for an Apple Magic Keyboard on Windows |
 | **"Tragic" Trackpad** | Three-finger swipes or drag for Magic Trackpad 2 on Windows |
 | **"Moodio" Display** | Brightness keys for Apple Studio Display and other monitors |
-| **Battery monitoring** | Separate keyboard/trackpad battery levels and low-battery alerts |
+| **Battery monitoring** | Keyboard, Trackpad 2, and Magic Mouse 2015 battery levels and low-battery alerts |
+| **Magic Mouse v2 support** | Read-only battery query using Input 0x90, with a Feature 0x47 fallback when that driver exposes it |
+| **Mouse scroll setup** | Opens the Apple Wireless Mouse driver guide; driver installation stays user-controlled |
 | **Portable Windows app** | One EXE, local configuration, no account, no telemetry |
 
 ## "Tragic" Keyboard: Apple function keys on Windows
@@ -95,7 +103,7 @@ app reopens devices for each poll instead of keeping Bluetooth HID handles open
 while a device sleeps. Polls run every five minutes while either device returns
 battery data, backing off to fifteen minutes when neither does.
 
-Both devices have **low-battery Windows notifications at 20% or below**, with
+Each device with a valid current battery reading has **low-battery Windows notifications at 20% or below**, with
 one **critical escalation at 5% or below**. The first fresh low reading after
 launch warns too. Alerts are tracked separately for each device and combined
 into one notification when both need a warning in the same poll. Repeated polls
@@ -114,9 +122,14 @@ it cannot guarantee a warning before a sleeping or disconnected device dies.
 - Windows 10 or Windows 11
 - Apple Magic Keyboard connected over Bluetooth
 - Apple Magic Trackpad 2 connected over Bluetooth
+- Optional Apple Magic Mouse 2015 (Bluetooth PID `0269`)
 - For trackpad pointer movement and two-finger scrolling, install the free,
   signed [mac-precision-touchpad](https://github.com/imbushuo/mac-precision-touchpad)
   driver once
+
+Magic Mouse scrolling uses the separate Apple Wireless Mouse driver. The
+application does not bundle or silently install kernel drivers; use the tray's
+scroll setup guide and inspect the driver package before installing it.
 
 The keyboard mappings, battery display, and monitor controls do not require that
 trackpad driver.
