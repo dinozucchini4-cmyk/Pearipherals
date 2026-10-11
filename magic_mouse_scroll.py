@@ -199,10 +199,12 @@ class MagicMouseScrollEngine:
             return
         self._last_touch_at = now
 
+        # Ignore weak/near-field detections. A single firm contact is required
+        # for this first scrolling implementation; any ambiguous multi-touch
+        # state releases the scroll baseline rather than guessing.
         active = [contact for contact in contacts
-                  if contact["state"] in (TOUCH_STATE_START, TOUCH_STATE_DRAG)]
-        # Conservative v1: only a single-touch scroll is implemented. Ambiguous
-        # multi-contact data resets the baseline rather than guessing a gesture.
+                  if contact["state"] in (TOUCH_STATE_START, TOUCH_STATE_DRAG)
+                  and contact["size"] >= 8]
         if len(active) != 1:
             self._active_id = None
             self._last_xy = None
@@ -238,8 +240,11 @@ class MagicMouseScrollEngine:
         self._wheel_x += dx * 120.0 / scale
         self._wheel_y += dy * 120.0 / scale
 
-        horizontal = int(self._wheel_x / 120.0) * 120
-        vertical = int(self._wheel_y / 120.0) * 120
+        # Windows understands high-resolution wheel messages as deltas smaller
+        # than one 120-unit detent. Legacy apps naturally accumulate these.
+        granularity = 12 if settings.get("smooth", True) else 120
+        horizontal = int(self._wheel_x / granularity) * granularity
+        vertical = int(self._wheel_y / granularity) * granularity
         self._wheel_x -= horizontal
         self._wheel_y -= vertical
         if vertical or horizontal:
