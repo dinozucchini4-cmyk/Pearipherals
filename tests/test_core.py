@@ -1610,7 +1610,7 @@ class BatteryTests(unittest.TestCase):
         backend = self.FakeHidBackend(
             devices,
             {},
-            {b"trackpad-pointer": b"\\x47\\x58"},
+            {b"trackpad-pointer": b"\x47\x58"},
             {b"trackpad-pointer": (0x47, 2)},
         )
         result = query_apple_battery(
@@ -1733,7 +1733,7 @@ class BatteryTests(unittest.TestCase):
         backend = self.FakeHidBackend(
             devices,
             {b"mouse-battery": OSError("Input 0x90 unavailable")},
-            {b"mouse-pointer": b"\\x47\\x50"},
+            {b"mouse-pointer": b"\x47\x50"},
             # No descriptor evidence: Feature 0x47 must not be queried.
         )
         result = query_apple_mouse_battery(
