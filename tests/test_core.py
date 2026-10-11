@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from pearipherals_core import (
+    BatteryAlertPolicy,
     BatteryPoller,
     BatteryResult,
     BatterySnapshot,
@@ -1693,6 +1694,31 @@ class BatteryTests(unittest.TestCase):
             [("open", b"new-path"), ("query", 0x90, 3), ("close",)], events
         )
 
+    def test_hid_backend_feature_report_closes_handle_after_success(self):
+        events = []
+
+        class Handle:
+            def open_path(self, path):
+                events.append(("open", path))
+
+            def get_feature_report(self, report_id, length):
+                events.append(("feature", report_id, length))
+                return b"\x47\x32"
+
+            def close(self):
+                events.append(("close",))
+
+        hid_module = mock.Mock()
+        hid_module.device.side_effect = Handle
+        report = HidBatteryBackend(hid_module).request_feature_report(
+            b"mouse-pointer", 0x47, 2
+        )
+        self.assertEqual(b"\x47\x32", report)
+        self.assertEqual(
+            [("open", b"mouse-pointer"), ("feature", 0x47, 2), ("close",)],
+            events,
+        )
+
     def test_hid_backend_closes_handle_after_successful_query(self):
         events = []
 
@@ -1715,6 +1741,19 @@ class BatteryTests(unittest.TestCase):
         self.assertEqual(b"\x90\x00\x2a", report)
         self.assertEqual(
             [("open", b"fresh-path"), ("query", 0x90, 3), ("close",)], events
+        )
+
+    def test_mouse_battery_participates_in_low_battery_alerts(self):
+        policy = BatteryAlertPolicy()
+        snapshot = BatterySnapshot(
+            BatteryResult("not_detected"),
+            BatteryResult("not_detected"),
+            10.0,
+            BatteryResult("available", 4),
+        )
+        self.assertEqual(
+            ("Magic Mouse: 4% (critical)",),
+            policy.evaluate(snapshot, now=10.0),
         )
 
     def test_mouse_v2_is_included_in_the_complete_battery_snapshot(self):
@@ -1852,7 +1891,8 @@ class BatteryTests(unittest.TestCase):
         self.assertEqual(
             "Magic Trackpad battery: not detected", label("trackpad")
         )
-        self.assertEqual(2, store.snapshot.call_count)
+        self.assertEqual("Magic Mouse battery: loading", label("mouse"))
+        self.assertEqual(3, store.snapshot.call_count)
 
     def test_each_complete_publication_requests_a_tray_refresh(self):
         store = mock.Mock()
