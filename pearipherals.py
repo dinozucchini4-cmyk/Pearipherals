@@ -2195,6 +2195,10 @@ MOUSE_SCROLL_DRIVER_URL = (
     "https://github.com/dinozucchini4-cmyk/"
     "Apple-Input-Device-Drivers-Windows-10-11/tree/master/AppleWirelessMouse"
 )
+TRACKPAD_DRIVER_URL = (
+    "https://github.com/vitoplantamura/"
+    "MagicTrackpad2ForWindows/releases/tag/v2.0"
+)
 
 
 def on_mouse_scroll_guide(icon, item):
@@ -2211,6 +2215,23 @@ def on_mouse_scroll_guide(icon, item):
             "The browser could not be opened. The driver guide is in the "
             "AppleWirelessMouse folder of the Apple Input Device Drivers repository.",
             "Magic Mouse scroll guide",
+        )
+
+
+def on_trackpad_driver_guide(icon, item):
+    """Open the signed Magic Trackpad 2 driver release; never install it here."""
+    _ = item
+    try:
+        opened = webbrowser.open(TRACKPAD_DRIVER_URL)
+    except Exception as exc:
+        append_error(f"Magic Trackpad driver guide could not open: {exc}")
+        opened = False
+    if not opened:
+        _notify(
+            icon,
+            "The browser could not be opened. Find MagicTrackpad2ForWindows v2.0 "
+            "in the upstream project's Releases page.",
+            "Magic Trackpad 2 driver guide",
         )
 
 
@@ -2930,6 +2951,8 @@ def main():
                 None, enabled=False),
             pystray.MenuItem(
                 "Magic Mouse scrolling setup guide", on_mouse_scroll_guide),
+            pystray.MenuItem(
+                "Magic Trackpad 2 signed driver guide", on_trackpad_driver_guide),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Touchpad settings", pystray.Menu(
                 pystray.MenuItem(
